@@ -1,0 +1,1421 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mi Coach de Ajedrez - Etapa 3b</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 12px;
+         background: #f4f4f6; color: #222; }
+  h1 { font-size: 18px; margin: 0 0 8px; color: #1f3a5f; }
+  .colores { display: flex; height: 14px; margin-bottom: 12px; border-radius: 5px; overflow: hidden; }
+  .colores div { flex: 1; }
+  .colores div.act { box-shadow: inset 0 -6px 0 #000; }
+  .layout { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+  .col-tablero { width: min(92vw, 480px); }
+  .col-panel { flex: 1; min-width: 300px; max-width: 560px; }
+
+  #tablero { display: grid;
+             grid-template-columns: repeat(8, minmax(0, 1fr));
+             grid-template-rows: repeat(8, minmax(0, 1fr));
+             width: 100%; aspect-ratio: 1 / 1; border: 3px solid #333;
+             user-select: none; }
+  .sq { position: relative; display: flex; align-items: center; justify-content: center;
+        cursor: pointer; font-size: min(8vw, 44px); line-height: 1;
+        min-width: 0; min-height: 0; overflow: hidden; }
+  .claro { background: #f0d9b5; }
+  .oscuro { background: #b58863; }
+  .sel { background: #f6e05e !important; }
+  .ultima { box-shadow: inset 0 0 0 100px rgba(255, 220, 0, 0.35); }
+  .legal::after { content: ""; position: absolute; width: 28%; height: 28%;
+                  border-radius: 50%; background: rgba(0, 120, 0, 0.45); }
+  .legal.ocupada::after { width: 90%; height: 90%; background: none;
+                          border: 4px solid rgba(0, 120, 0, 0.5); }
+  .coord { position: absolute; font-size: 10px; color: rgba(0,0,0,0.55); }
+  .coord.f { left: 2px; top: 1px; }
+  .coord.c { right: 2px; bottom: 1px; }
+  .pb { color: #fff; text-shadow: 0 0 2px #000, 0 0 2px #000, 0 0 3px #000; }
+  .pn { color: #111; text-shadow: 0 0 1px #fff; }
+
+  .estado { margin: 8px 0; font-weight: bold; min-height: 22px; }
+  .botones { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+  button { padding: 7px 11px; border: 1px solid #1f3a5f; background: #fff; color: #1f3a5f;
+           border-radius: 5px; cursor: pointer; font-size: 14px; }
+  button:hover { background: #e8eef6; }
+  button.prim { background: #1f3a5f; color: #fff; }
+  input[type=text], textarea, select { width: 100%; padding: 6px; font-size: 14px;
+         border: 1px solid #999; border-radius: 5px; font-family: inherit; }
+  textarea { font-family: Consolas, monospace; font-size: 12px; resize: vertical; }
+  .caja { background: #fff; border: 1px solid #ccc; border-radius: 6px;
+          padding: 10px; margin-bottom: 10px; }
+  .caja h2 { font-size: 14px; margin: 0 0 6px; color: #1f3a5f; }
+  .fila { display: flex; gap: 6px; }
+  .fila > input { flex: 1; }
+  #lista { max-height: 130px; overflow-y: auto; font-size: 15px; line-height: 1.8; }
+  .nj { color: #777; margin-left: 6px; }
+  .jug { cursor: pointer; padding: 1px 5px; border-radius: 3px; }
+  .jug:hover { background: #e8eef6; }
+  .jug.actual { background: #1f3a5f; color: #fff; }
+  .msg { font-size: 13px; color: #b3261e; min-height: 18px; margin-top: 4px; }
+  small { color: #666; }
+  details.caja summary { cursor: pointer; font-weight: bold; color: #1f3a5f; font-size: 14px; }
+  details.caja[open] summary { margin-bottom: 8px; }
+
+  /* Coach */
+  .cfg { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; font-size: 13px; }
+  .cfg select { width: auto; }
+  .banda { color: #fff; padding: 8px 10px; border-radius: 6px 6px 0 0;
+           display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline;
+           -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .cuerpo { border: 2px solid #ccc; border-top: none; border-radius: 0 0 6px 6px; padding: 10px; }
+  .num { font-size: 12px; color: #666; }
+  .preg { font-size: 17px; font-weight: bold; margin: 4px 0 8px; }
+  .ops label { display: block; padding: 7px 9px; border: 1px solid #ccc; border-radius: 5px;
+               margin: 4px 0; cursor: pointer; background: #fafafa; }
+  .ops label:hover { background: #eef2fb; }
+  .ops input { margin-right: 6px; }
+  .fb { padding: 8px 10px; border-radius: 5px; margin: 8px 0; font-size: 14px; }
+  .fb ul { margin: 4px 0 4px 18px; padding: 0; }
+  .fb.ok { background: #e6f4ea; border-left: 4px solid #1b7a2e; }
+  .fb.mal { background: #fdecea; border-left: 4px solid #b3261e; }
+  .fb.neu { background: #eef2fb; border-left: 4px solid #1f3a5f; }
+  .aviso { color: #b3261e; font-size: 13px; min-height: 16px; }
+  .info { background: #f0f3f8; border-radius: 6px; padding: 10px; font-size: 14px; }
+  .chip { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: middle; }
+  .chipm { display: inline-block; background: #fff3c4; border: 1px solid #c9a800; border-radius: 12px;
+           padding: 2px 10px; margin: 2px 4px 2px 0; font-weight: bold; }
+  .chipm a { cursor: pointer; color: #b3261e; margin-left: 6px; }
+  table.mapa { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.mapa td, table.mapa th { border: 1px solid #ccc; padding: 3px 5px; text-align: left; }
+  table.mapa th { background: #e8eef6; }
+</style>
+</head>
+<body>
+
+<h1>♟ Mi Coach de Ajedrez · Etapa 3b: Azul, Rojo, Amarillo y Granate</h1>
+<div class="colores" id="franja"></div>
+
+<div class="layout">
+  <div class="col-tablero">
+    <div id="tablero"></div>
+    <div class="estado" id="estado"></div>
+    <div class="botones">
+      <button onclick="irA(0)" title="Inicio">⏮</button>
+      <button onclick="irA(ply-1)" title="Atrás">◀</button>
+      <button onclick="irA(ply+1)" title="Adelante">▶</button>
+      <button onclick="irA(movs.length)" title="Final">⏭</button>
+      <button onclick="girar()">🔄 Girar</button>
+      <button onclick="nueva()">Nueva partida</button>
+    </div>
+  </div>
+
+  <div class="col-panel">
+
+    <div class="caja">
+      <div class="cfg">
+        <label>Yo juego con:
+          <select id="miColor" onchange="cambiarColor()">
+            <option value="w">Blancas</option>
+            <option value="b">Negras</option>
+          </select>
+        </label>
+        <label>Ayuda visual:
+          <select id="nivel" onchange="cambiarNivel()">
+            <option value="1">1 · Color + gesto + pregunta</option>
+            <option value="2">2 · Color + palabra clave</option>
+            <option value="3">3 · Solo el color</option>
+            <option value="4">4 · Pantalla neutra</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="voz" onchange="guardarCfg()"> 🔊 Voz</label>
+      </div>
+      <div id="coachBody"></div>
+    </div>
+
+    <div class="caja">
+      <h2>Introducir jugada (del rival o tuya)</h2>
+      <div class="fila">
+        <input type="text" id="entrada" placeholder="Ej: Cf3, e4, Axc6, O-O, e8=D">
+        <button class="prim" onclick="anadir()">Añadir</button>
+      </div>
+      <div style="margin-top:6px">
+        <small>Notación:</small>
+        <select id="notacion" onchange="actualizar()" style="width:auto">
+          <option value="es" selected>Español (R D T A C)</option>
+          <option value="en">Inglés (K Q R B N)</option>
+        </select>
+      </div>
+      <div class="msg" id="msg"></div>
+      <small>Orden: 1) escribe la jugada del rival, 2) el coach te guía, 3) juegas tu jugada en Lucas Chess y la registras aquí (o con el botón del final del coach).</small>
+    </div>
+
+    <div class="caja">
+      <h2>Jugadas (clic para ir a una)</h2>
+      <div id="lista"></div>
+    </div>
+
+    <details class="caja">
+      <summary>🎨 Mapa de colores y gestos</summary>
+      <div id="mapa"></div>
+    </details>
+
+    <details class="caja">
+      <summary>📊 Mis aciertos por color</summary>
+      <div id="stats"></div>
+      <div class="botones"><button onclick="borrarStats()">Borrar estadística</button></div>
+    </details>
+
+    <details class="caja">
+      <summary>📋 FEN y PGN</summary>
+      <h2>FEN (posición actual)</h2>
+      <textarea id="fen" rows="2"></textarea>
+      <div class="botones">
+        <button onclick="cargarFEN()">Cargar FEN</button>
+        <button onclick="copiar('fen')">Copiar</button>
+      </div>
+      <h2>PGN (partida completa)</h2>
+      <textarea id="pgn" rows="5" placeholder="Pega aquí un PGN y pulsa Cargar"></textarea>
+      <div class="botones">
+        <button onclick="cargarPGN()">Cargar PGN</button>
+        <button onclick="exportarPGN()">Exportar PGN</button>
+        <button onclick="copiar('pgn')">Copiar</button>
+      </div>
+      <small>El PGN se guarda siempre en notación inglesa estándar.</small>
+    </details>
+
+  </div>
+</div>
+
+<script>
+if (typeof Chess === 'undefined') {
+  alert('No se pudo cargar chess.js. Revisa tu conexión a internet y recarga la página.');
+}
+const $ = id => document.getElementById(id);
+
+/* ============ DATOS DEL SISTEMA ============ */
+const PASOS = [
+  {n:0, nom:'Tiempo',     col:'#9e9e9e', cn:'Gris',     gesto:'Mano apoyada y abierta',       clave:'Ritmo',           ancla:'¿Cuánto merece esta jugada? ¿Sigo mi repertorio?'},
+  {n:1, nom:'Leer',       col:'#1e6fd9', cn:'Azul',     gesto:'Pulgar + yema del índice',     clave:'¿Qué?',           ancla:'¿Qué hizo? ¿Qué amenaza? ¿Qué quiere después?'},
+  {n:2, nom:'Seguridad',  col:'#d32f2f', cn:'Rojo',     gesto:'Pulgar + yema del medio',      clave:'Colgado',         ancla:'¿Algo sin defender? ¿Reyes? ¿Clavadas?'},
+  {n:3, nom:'Modo',       col:'#f57c00', cn:'Naranja',  gesto:'Pulgar + yema del anular',     clave:'Ritmo de ataque', ancla:'¿Ataco, contraataco o defiendo?'},
+  {n:4, nom:'Principios', col:'#2e9e4f', cn:'Verde',    gesto:'Pulgar + yema del meñique',    clave:'Plan',            ancla:'¿Peor pieza? ¿Centro? ¿Rey?'},
+  {n:5, nom:'Candidatas', col:'#f2c400', cn:'Amarillo', gesto:'Pulgar + falange del índice',  clave:'J-C-A',           ancla:'Jaques, capturas, amenazas'},
+  {n:6, nom:'Calcular',   col:'#7b3fc4', cn:'Violeta',  gesto:'Pulgar + falange del medio',   clave:'Línea',           ancla:'Una línea completa, su mejor respuesta'},
+  {n:7, nom:'Evaluar',    col:'#18a6a6', cn:'Turquesa', gesto:'Pulgar + falange del anular',  clave:'M.R.A.E.I.',      ancla:'¿Quién está mejor?'},
+  {n:8, nom:'Chequeo',    col:'#7a1f33', cn:'Granate',  gesto:'Pulgar + falange del meñique', clave:'Ojo',             ancla:'¿Qué puede hacer él? ¿Dejo algo?'}
+];
+const ORDEN = [1, 2, 5, 8];
+const VAL = {p:1, n:3, b:3, r:5, q:9, k:100};
+const NOM = {p:'peón', n:'caballo', b:'alfil', r:'torre', q:'dama', k:'rey'};
+const ART = {p:'el', n:'el', b:'el', r:'la', q:'la', k:'el'};
+
+/* ============ ESTADO DEL TABLERO ============ */
+const FEN_INICIAL = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+const GLIFO = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟\uFE0E' };
+const A_ES = { K: 'R', Q: 'D', R: 'T', B: 'A', N: 'C' };
+const A_EN = { R: 'K', D: 'Q', T: 'R', A: 'B', C: 'N' };
+
+let fenInicio = FEN_INICIAL;
+let movs = [];
+let ply = 0;
+let game = new Chess();
+let orient = 'w';
+let sel = null;
+let ultima = null;
+let resaltes = {};
+
+/* ============ ESTADO DEL COACH ============ */
+let miColor = 'w';
+let nivel = 1;
+let C = { key: null, ctx: null, preg: {1:[],2:[],5:[],8:[]}, paso: 1, q: 0, verif: {}, tmp: [],
+          verPreg: false, cand: [], eleg: [], elegida: null, tras: null };
+
+/* ============ NOTACIÓN ============ */
+function aEs(san) {
+  return san.replace(/^[KQRBN]/, c => A_ES[c]).replace(/=([QRBN])/, (m, c) => '=' + A_ES[c]);
+}
+function aEn(s) {
+  return s.trim().replace(/0/g, 'O').replace(/^[RDTAC]/, c => A_EN[c]).replace(/=([RDTAC])/, (m, c) => '=' + A_EN[c]);
+}
+function nombreJug(san) {
+  return $('notacion').value === 'es' ? aEs(san) : san;
+}
+
+/* ============ TABLERO ============ */
+function reconstruir() {
+  game = new Chess();
+  if (fenInicio !== FEN_INICIAL) game.load(fenInicio);
+  ultima = null;
+  for (let i = 0; i < ply; i++) ultima = game.move(movs[i]);
+  sel = null;
+}
+
+function irA(n) {
+  if (n < 0) n = 0;
+  if (n > movs.length) n = movs.length;
+  ply = n;
+  reconstruir();
+  actualizar();
+}
+
+function girar() { orient = orient === 'w' ? 'b' : 'w'; dibujarTablero(); }
+
+function nueva() {
+  if (movs.length && !confirm('¿Empezar una partida nueva? Se borrará la actual.')) return;
+  fenInicio = FEN_INICIAL; movs = []; ply = 0;
+  reconstruir();
+  $('pgn').value = '';
+  actualizar();
+}
+
+function dibujarTablero() {
+  const t = $('tablero');
+  t.innerHTML = '';
+  const legales = sel ? game.moves({ square: sel, verbose: true }).map(m => m.to) : [];
+  const files = 'abcdefgh';
+  for (let r = 0; r < 8; r++) {
+    for (let c = 0; c < 8; c++) {
+      const fi = orient === 'w' ? c : 7 - c;
+      const ra = orient === 'w' ? 8 - r : r + 1;
+      const sq = files[fi] + ra;
+      const d = document.createElement('div');
+      let cls = 'sq ' + ((fi + ra) % 2 === 0 ? 'oscuro' : 'claro');
+      if (sq === sel) cls += ' sel';
+      if (ultima && (sq === ultima.from || sq === ultima.to)) cls += ' ultima';
+      const p = game.get(sq);
+      if (legales.includes(sq)) cls += ' legal' + (p ? ' ocupada' : '');
+      d.className = cls;
+      d.dataset.sq = sq;
+      if (resaltes[sq]) d.style.boxShadow = 'inset 0 0 0 5px ' + resaltes[sq];
+      if (p) {
+        const s = document.createElement('span');
+        s.className = p.color === 'w' ? 'pb' : 'pn';
+        s.textContent = GLIFO[p.type];
+        d.appendChild(s);
+      }
+      if (c === 0) { const x = document.createElement('span'); x.className = 'coord f'; x.textContent = ra; d.appendChild(x); }
+      if (r === 7) { const x = document.createElement('span'); x.className = 'coord c'; x.textContent = files[fi]; d.appendChild(x); }
+      d.onclick = () => clicCasilla(sq);
+      t.appendChild(d);
+    }
+  }
+}
+
+function clicCasilla(sq) {
+  if (sel) {
+    const ok = game.moves({ square: sel, verbose: true }).some(m => m.to === sq);
+    if (ok) { mover(sel, sq); return; }
+  }
+  const p = game.get(sq);
+  sel = (p && p.color === game.turn() && sq !== sel) ? sq : null;
+  dibujarTablero();
+}
+
+function mover(from, to) {
+  let promotion;
+  const p = game.get(from);
+  if (p.type === 'p' && (to[1] === '8' || to[1] === '1')) {
+    const r = (prompt('Promoción: q = dama, r = torre, b = alfil, n = caballo', 'q') || 'q').toLowerCase();
+    promotion = ['q', 'r', 'b', 'n'].includes(r) ? r : 'q';
+  }
+  const m = game.move({ from: from, to: to, promotion: promotion });
+  if (!m) return;
+  registrar(m);
+}
+
+function registrar(m) {
+  movs = movs.slice(0, ply);
+  movs.push(m.san);
+  ply++;
+  ultima = m;
+  sel = null;
+  actualizar();
+}
+
+function anadir() {
+  const inp = $('entrada');
+  const msg = $('msg');
+  let txt = inp.value.trim();
+  if (!txt) return;
+  if ($('notacion').value === 'es') txt = aEn(txt);
+  else txt = txt.replace(/0/g, 'O');
+  const m = game.move(txt, { sloppy: true });
+  if (!m) { msg.textContent = 'Jugada no válida en esta posición: ' + inp.value; return; }
+  msg.textContent = '';
+  inp.value = '';
+  registrar(m);
+  inp.focus();
+}
+
+function dibujarLista() {
+  const L = $('lista');
+  L.innerHTML = '';
+  let primero = 0;
+  let numInicial = 1;
+  if (fenInicio !== FEN_INICIAL) {
+    const partes = fenInicio.split(' ');
+    numInicial = parseInt(partes[5]) || 1;
+    if (partes[1] === 'b') {
+      const n = document.createElement('span'); n.className = 'nj'; n.textContent = numInicial + '...';
+      L.appendChild(n);
+      if (movs.length) L.appendChild(crearJug(0));
+      primero = 1; numInicial++;
+    }
+  }
+  for (let i = primero; i < movs.length; i++) {
+    if ((i - primero) % 2 === 0) {
+      const n = document.createElement('span'); n.className = 'nj';
+      n.textContent = (numInicial + (i - primero) / 2) + '.';
+      L.appendChild(n);
+    }
+    L.appendChild(crearJug(i));
+  }
+  const act = L.querySelector('.actual');
+  if (act) act.scrollIntoView({ block: 'nearest' });
+}
+function crearJug(i) {
+  const j = document.createElement('span');
+  j.className = 'jug' + (i === ply - 1 ? ' actual' : '');
+  j.textContent = nombreJug(movs[i]);
+  j.onclick = () => irA(i + 1);
+  return j;
+}
+
+function dibujarEstado() {
+  const e = $('estado');
+  const turno = game.turn() === 'w' ? 'blancas' : 'negras';
+  let t = 'Mueven ' + turno;
+  if (game.in_checkmate()) t = 'Jaque mate. Ganan ' + (game.turn() === 'w' ? 'negras' : 'blancas');
+  else if (game.in_stalemate()) t = 'Tablas por rey ahogado';
+  else if (game.in_draw()) t = 'Tablas';
+  else if (game.in_check()) t += ' · ¡JAQUE!';
+  e.textContent = t;
+}
+
+function actualizar() {
+  dibujarLista();
+  dibujarEstado();
+  $('fen').value = game.fen();
+  coachSync();
+}
+
+function cargarFEN() {
+  const f = $('fen').value.trim();
+  const g = new Chess();
+  if (!g.load(f)) { alert('FEN no válido.'); return; }
+  fenInicio = g.fen(); movs = []; ply = 0;
+  reconstruir();
+  actualizar();
+}
+
+function cargarPGN() {
+  const txt = $('pgn').value;
+  const g = new Chess();
+  if (!g.load_pgn(txt)) { alert('PGN no válido. Revisa el texto.'); return; }
+  const h = g.header();
+  fenInicio = (h && h.FEN) ? h.FEN : FEN_INICIAL;
+  movs = g.history();
+  ply = movs.length;
+  reconstruir();
+  actualizar();
+}
+
+function exportarPGN() {
+  const g = new Chess();
+  if (fenInicio !== FEN_INICIAL) {
+    g.load(fenInicio);
+    g.header('SetUp', '1', 'FEN', fenInicio);
+  }
+  for (const m of movs) g.move(m);
+  g.header('Event', 'Entrenamiento', 'White', 'Yo', 'Black', 'Rival');
+  $('pgn').value = g.pgn();
+}
+
+function copiar(id) {
+  const el = $(id);
+  el.select();
+  document.execCommand('copy');
+}
+
+/* ============ GEOMETRÍA: ATAQUES Y DEFENSAS ============ */
+function sqName(r, c) { return 'abcdefgh'[c] + (8 - r); }
+
+function libre(b, r, c, tr, tc) {
+  const sr = Math.sign(tr - r), sc = Math.sign(tc - c);
+  let rr = r + sr, cc = c + sc;
+  while (rr !== tr || cc !== tc) {
+    if (b[rr][cc]) return false;
+    rr += sr; cc += sc;
+  }
+  return true;
+}
+
+function ataca(b, r, c, tr, tc) {
+  const p = b[r][c];
+  const dr = tr - r, dc = tc - c;
+  if (!dr && !dc) return false;
+  const ar = Math.abs(dr), ac = Math.abs(dc);
+  switch (p.type) {
+    case 'p': return dr === (p.color === 'w' ? -1 : 1) && ac === 1;
+    case 'n': return (ar === 1 && ac === 2) || (ar === 2 && ac === 1);
+    case 'k': return ar <= 1 && ac <= 1;
+    case 'b': return ar === ac && libre(b, r, c, tr, tc);
+    case 'r': return (dr === 0 || dc === 0) && libre(b, r, c, tr, tc);
+    case 'q': return (ar === ac || dr === 0 || dc === 0) && libre(b, r, c, tr, tc);
+  }
+  return false;
+}
+
+function atacantes(b, tr, tc, color) {
+  const res = [];
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = b[r][c];
+    if (p && p.color === color && ataca(b, r, c, tr, tc)) res.push({ type: p.type, sq: sqName(r, c) });
+  }
+  return res;
+}
+
+/* Piezas de 'color' en riesgo: sin defensa, atacadas por pieza menor, o más atacantes que defensores */
+function insegurasDe(b, color) {
+  const op = color === 'w' ? 'b' : 'w', res = [];
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = b[r][c];
+    if (!p || p.color !== color || p.type === 'k') continue;
+    const att = atacantes(b, r, c, op);
+    if (!att.length) continue;
+    const def = atacantes(b, r, c, color);
+    const minA = att.reduce((m, a) => VAL[a.type] < VAL[m.type] ? a : m, att[0]);
+    let motivo = null;
+    if (def.length === 0) motivo = 'colgada';
+    else if (VAL[minA.type] < VAL[p.type]) motivo = 'menor';
+    else if (att.length > def.length) motivo = 'mas';
+    if (motivo) res.push({ sq: sqName(r, c), type: p.type, motivo: motivo, minA: minA, na: att.length, nd: def.length });
+  }
+  return res;
+}
+
+const DIRS = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+function clavadas(b, color) {
+  let kr = -1, kc = -1;
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = b[r][c];
+    if (p && p.type === 'k' && p.color === color) { kr = r; kc = c; }
+  }
+  const res = [];
+  if (kr < 0) return res;
+  for (const d of DIRS) {
+    const dr = d[0], dc = d[1];
+    let r = kr + dr, c = kc + dc, a = null;
+    while (r >= 0 && r < 8 && c >= 0 && c < 8) {
+      const p = b[r][c];
+      if (p) {
+        if (!a) {
+          if (p.color !== color || p.type === 'k') break;
+          a = { type: p.type, sq: sqName(r, c) };
+        } else {
+          const orto = (dr === 0 || dc === 0);
+          if (p.color !== color && (p.type === 'q' || (orto && p.type === 'r') || (!orto && p.type === 'b'))) {
+            res.push({ type: a.type, sq: a.sq, por: { type: p.type, sq: sqName(r, c) } });
+          }
+          break;
+        }
+      }
+      r += dr; c += dc;
+    }
+  }
+  return res;
+}
+
+function estadoRey(b, color) {
+  let kr = -1, kc = -1;
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = b[r][c];
+    if (p && p.type === 'k' && p.color === color) { kr = r; kc = c; }
+  }
+  const base = color === 'w' ? 7 : 0;
+  const tipo = kr !== base ? 'exp' : ((kc >= 6 || kc <= 2) ? 'enr' : 'cen');
+  const fr = color === 'w' ? kr - 1 : kr + 1;
+  let esc = 0, max = 0;
+  for (let c = kc - 1; c <= kc + 1; c++) {
+    if (c < 0 || c > 7 || fr < 0 || fr > 7) continue;
+    max++;
+    const p = b[fr][c];
+    if (p && p.type === 'p' && p.color === color) esc++;
+  }
+  return { sq: sqName(kr, kc), tipo: tipo, esc: esc, max: max };
+}
+
+/* Si el rival moviera otra vez: jaques y capturas posibles */
+function hipotesisRival() {
+  if (game.in_check()) return null;
+  const f = game.fen().split(' ');
+  f[1] = f[1] === 'w' ? 'b' : 'w';
+  f[3] = '-';
+  const g = new Chess();
+  if (!g.load(f.join(' '))) return null;
+  const ms = g.moves({ verbose: true });
+  return { jaques: ms.filter(m => /[+#]/.test(m.san)), caps: ms.filter(m => m.captured) };
+}
+
+/* ============ TÁCTICA: CAPTURAS, AMENAZAS (usa chess.js con reglas reales) ============ */
+const estricta = u => u.motivo === 'colgada' || u.motivo === 'menor';
+function esJaque(m) { return /[+#]/.test(m.san); }
+
+/* Mejor ganancia neta para el bando que mueve capturando en 'sq' (cambios sucesivos, siempre con la pieza más barata) */
+function seeVal(g, sq, prof) {
+  if (prof > 8) return 0;
+  const caps = g.moves({ verbose: true }).filter(m => m.to === sq && m.captured);
+  if (!caps.length) return 0;
+  caps.sort((a, b) => VAL[a.piece] - VAL[b.piece]);
+  const m = caps[0];
+  const gan = VAL[m.captured];
+  g.move({ from: m.from, to: m.to, promotion: m.promotion });
+  const resp = seeVal(g, sq, prof + 1);
+  g.undo();
+  return Math.max(0, gan - resp);
+}
+function netoCap(g, m) {
+  g.move({ from: m.from, to: m.to, promotion: m.promotion });
+  const r = seeVal(g, m.to, 0);
+  g.undo();
+  return VAL[m.captured] - r;
+}
+
+/* Jugadas tranquilas de 'color' (le toca mover en g) que crean una amenaza nueva y clara, sin dejar piezas propias en riesgo */
+function amenazasDe(g, color) {
+  const rv = color === 'w' ? 'b' : 'w';
+  const antes = insegurasDe(g.board(), rv).filter(estricta).map(u => u.sq);
+  const antesMias = insegurasDe(g.board(), color).map(u => u.sq);
+  const res = [];
+  const ms = g.moves({ verbose: true });
+  for (const m of ms) {
+    if (m.captured) continue;
+    g.move({ from: m.from, to: m.to, promotion: m.promotion });
+    const b = g.board();
+    const nuevos = insegurasDe(b, rv).filter(estricta).filter(u => !antes.includes(u.sq));
+    const propiasNuevas = insegurasDe(b, color).filter(u => !antesMias.includes(u.sq));
+    g.undo();
+    if (nuevos.length && !propiasNuevas.length) res.push({ m: m, nuevos: nuevos });
+  }
+  const val = a => Math.max.apply(null, a.nuevos.map(u => VAL[u.type]));
+  res.sort((a, b) => val(b) - val(a));
+  return res;
+}
+
+/* ============ TEXTOS AUXILIARES ============ */
+function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+function pz(t, sq) { return ART[t] + ' ' + NOM[t] + (sq ? ' de ' + sq : ''); }
+function lista(arr, max) {
+  max = max || 8;
+  if (!arr.length) return '';
+  let h = '<ul>' + arr.slice(0, max).map(x => '<li>' + x + '</li>').join('');
+  if (arr.length > max) h += '<li>… y ' + (arr.length - max) + ' más</li>';
+  return h + '</ul>';
+}
+function motivoTxt(u) {
+  if (u.motivo === 'colgada') return 'bajo ataque y sin ninguna defensa';
+  if (u.motivo === 'menor') return 'recibe ataque de una pieza de menor valor (' + pz(u.minA.type, u.minA.sq) + ')';
+  return 'más atacantes (' + u.na + ') que defensores (' + u.nd + ')';
+}
+function descU(u) { return '<b>' + cap(pz(u.type, u.sq)) + '</b>: ' + motivoTxt(u); }
+function txtNet(n) { return n > 0 ? 'gana ' + n + ' de valor' : n === 0 ? 'cambio igual' : 'pierde ' + (-n) + ' de valor'; }
+function descAmen(a) {
+  return '<b>' + nombreJug(a.m.san) + '</b> → amenaza ' + a.nuevos.map(u =>
+    pz(u.type, u.sq) + (u.motivo === 'colgada' ? ' (sin defensa)' : ' (con una pieza menor)')).join(' y ');
+}
+const TIPO_REY = { enr: 'enrocado (o en la esquina)', cen: 'en el centro, sin enrocar', exp: 'fuera de su casa, expuesto' };
+const NOTA_ESTATICA = '<br><small>Cuenta cambios sobre esa casilla; no ve tácticas más profundas. Stockfish lo afinará en la Etapa 4.</small>';
+
+/* ============ CONTEXTO DE LA POSICIÓN ============ */
+function calcCtx() {
+  if (game.game_over()) return { estado: 'fin' };
+  if (game.turn() !== miColor) return { estado: 'espera' };
+  const me = miColor, op = me === 'w' ? 'b' : 'w';
+  const b = game.board();
+  const ult = (ply > 0 && ultima && ultima.color !== me) ? ultima : null;
+  let prevB = null;
+  if (ult) {
+    const g2 = new Chess();
+    if (fenInicio !== FEN_INICIAL) g2.load(fenInicio);
+    for (let i = 0; i < ply - 1; i++) g2.move(movs[i]);
+    prevB = g2.board();
+  }
+  const misInseg = insegurasDe(b, me);
+  const susInseg = insegurasDe(b, op);
+  const prevMis = prevB ? insegurasDe(prevB, me) : [];
+
+  const gc = new Chess(game.fen());
+  const legales = gc.moves({ verbose: true });
+  const jaques = legales.filter(esJaque);
+  const caps = legales.filter(m => m.captured).map(m => ({ m: m, net: netoCap(gc, m) }));
+  const amen = amenazasDe(gc, me);
+
+  return {
+    estado: 'ok', me: me, op: op, b: b, ult: ult,
+    misInseg: misInseg, susInseg: susInseg,
+    nuevas: misInseg.filter(u => !prevMis.some(p => p.sq === u.sq)),
+    viejas: misInseg.filter(u => prevMis.some(p => p.sq === u.sq)),
+    enJaque: game.in_check(),
+    clavM: clavadas(b, me), clavS: clavadas(b, op),
+    reyM: estadoRey(b, me), reyS: estadoRey(b, op),
+    legales: legales, jaques: jaques, caps: caps, amen: amen
+  };
+}
+
+/* ============ ANÁLISIS TRAS MI JUGADA ELEGIDA (Granate) ============ */
+function calcTras(san) {
+  const g = new Chess(game.fen());
+  const m = g.move(san);
+  if (!m) return null;
+  const me = miColor, rv = me === 'w' ? 'b' : 'w';
+  const bA = game.board(), bD = g.board();
+  const antesM = insegurasDe(bA, me), despM = insegurasDe(bD, me);
+  const t = { san: san, m: m, mate: g.in_checkmate(), fin: g.game_over(), jaques: [], caps: [], amen: [] };
+  if (!t.fin) {
+    const ms = g.moves({ verbose: true });
+    t.jaques = ms.filter(esJaque);
+    t.caps = ms.filter(x => x.captured).map(x => ({ m: x, net: netoCap(g, x) }));
+    t.amen = amenazasDe(g, rv);
+  }
+  t.nuevas = despM.filter(u => !antesM.some(p => p.sq === u.sq));
+  t.viejas = despM.filter(u => antesM.some(p => p.sq === u.sq));
+  t.defPerd = [];
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const pa = bA[r][c], pd = bD[r][c];
+    if (!pa || !pd || pa.color !== me || pd.color !== me || pa.type !== pd.type || pa.type === 'k') continue;
+    const sq = sqName(r, c);
+    if (sq === m.from || sq === m.to) continue;
+    const dA = atacantes(bA, r, c, me).length, dD = atacantes(bD, r, c, me).length;
+    if (dD < dA) t.defPerd.push({ sq: sq, type: pa.type, dA: dA, dD: dD, atac: atacantes(bD, r, c, rv).length > 0 });
+  }
+  return t;
+}
+function getTras() {
+  if (!C.elegida) return null;
+  if (!C.tras || C.tras.san !== C.elegida) C.tras = calcTras(C.elegida);
+  return C.tras;
+}
+
+/* ============ PREGUNTAS ============ */
+function construirPreguntas(x) {
+  const u = x.ult, P1 = [], P2 = [], P5 = [], P8 = [];
+  const SN = [['si', 'Sí'], ['no', 'No']];
+
+  /* ---------- AZUL ---------- */
+  if (u) {
+    P1.push({
+      id: '1a', corto: '¿Qué pieza movió?',
+      texto: '¿Qué hizo? Empiezo por lo básico: ¿qué pieza movió?', tipo: 'radio',
+      ops: [['p','Peón'],['n','Caballo'],['b','Alfil'],['r','Torre'],['q','Dama'],['k','Rey']],
+      ev: s => ({
+        ok: s[0] === u.piece,
+        html: 'Fue ' + pz(u.piece) + ': <b>' + nombreJug(u.san) + '</b> (de ' + u.from + ' a ' + u.to + ').',
+        res: [u.from, u.to]
+      })
+    });
+
+    P1.push({
+      id: '1b', corto: '¿Qué hizo?',
+      texto: '¿Qué hizo exactamente? Marca todo lo que corresponda.', tipo: 'check',
+      ops: [['cap','Capturó algo'],['jaque','Dio jaque'],['enroque','Enrocó'],['nada','Nada de eso: jugada tranquila']],
+      ev: s => {
+        const jaque = /[+#]/.test(u.san), enr = /[kq]/.test(u.flags), cp = !!u.captured;
+        const exp = [];
+        if (cp) exp.push('cap');
+        if (jaque) exp.push('jaque');
+        if (enr) exp.push('enroque');
+        if (!exp.length) exp.push('nada');
+        const ok = s.length === exp.length && exp.every(v => s.includes(v));
+        const partes = [];
+        if (cp) partes.push('capturó ' + pz(u.captured));
+        if (jaque) partes.push('da jaque');
+        if (enr) partes.push('enrocó');
+        if (u.promotion) partes.push('promocionó');
+        return {
+          ok: ok,
+          html: 'Lo que hizo: ' + (partes.length ? partes.join(', ') : 'una jugada tranquila (sin captura, jaque ni enroque)') + '.',
+          res: [u.from, u.to]
+        };
+      }
+    });
+
+    P1.push({
+      id: '1c', corto: '¿Amenaza nueva contra mí?',
+      texto: '¿Qué amenaza ahora? ¿Su jugada amenaza algo mío que antes estaba tranquilo?', tipo: 'radio',
+      ops: [['si','Sí, hay una amenaza nueva contra mis piezas'],['no','No, no veo amenaza nueva']],
+      ev: s => {
+        const hay = x.nuevas.length > 0;
+        let h = hay ? 'Amenazas nuevas contra mí:' + lista(x.nuevas.map(descU))
+                    : 'No veo piezas mías nuevas bajo amenaza.';
+        if (x.viejas.length) h += 'Ya estaban en riesgo antes de su jugada:' + lista(x.viejas.map(descU));
+        if (x.enJaque) h += '<br>⚠️ Además estoy <b>en jaque</b>.';
+        return { ok: (s[0] === 'si') === hay, html: h, res: x.nuevas.concat(x.viejas).map(v => v.sq) };
+      }
+    });
+
+    P1.push({
+      id: '1d', corto: '¿Qué quiere después?',
+      texto: '¿Qué quiere hacer en la siguiente? Si pudiera mover dos veces seguidas, ¿qué haría?', tipo: 'radio',
+      ops: [['cap','Capturar una pieza mía'],['jaque','Dar jaque'],['des','Seguir desarrollándose o enrocar'],
+            ['plan','Preparar un plan (rotura de peones, espacio)'],['ns','No lo sé']],
+      ev: s => {
+        const h = hipotesisRival();
+        if (!h) return { ok: null, html: 'Estoy en jaque: lo primero es salir del jaque.', res: [] };
+        const jaques = h.jaques.map(m => nombreJug(m.san));
+        const caps = h.caps.filter(m => x.misInseg.some(v => v.sq === m.to)).map(m => nombreJug(m.san));
+        const concreto = jaques.length > 0 || caps.length > 0;
+        const v = s[0];
+        let ok = null;
+        if (v === 'cap') ok = h.caps.length > 0;
+        else if (v === 'jaque') ok = jaques.length > 0;
+        else if (v === 'des' || v === 'plan') ok = concreto ? false : null;
+        let html = 'Si él moviera otra vez:<ul>' +
+          '<li>Jaques posibles: ' + (jaques.length ? jaques.slice(0, 6).join(', ') : 'ninguno') + '</li>' +
+          '<li>Capturas sobre piezas mías en riesgo: ' + (caps.length ? caps.slice(0, 6).join(', ') : 'ninguna') + '</li></ul>';
+        if (ok === false && (v === 'des' || v === 'plan')) html += 'Había algo concreto antes que un plan lento: primero lo forzado.';
+        if (ok === null) html += 'Esta pregunta es de reflexión: no se puntúa.';
+        return { ok: ok, html: html, res: [] };
+      }
+    });
+
+    P1.push({
+      id: '1e', corto: '¿Es un cebo?',
+      texto: '¿Es un cebo? ¿Me ofrece algo que parece gratis?', tipo: 'radio',
+      ops: [['si','Sí, me ofrece algo'],['no','No, no me ofrece nada'],['ns','No lo sé']],
+      ev: s => {
+        const regalos = x.susInseg.filter(v => v.motivo !== 'mas');
+        const hay = regalos.length > 0;
+        let html = hay ? 'Piezas suyas que parecen regaladas:' + lista(regalos.map(descU)) +
+                         'Antes de tomarlas, pregúntate por qué las deja ahí.'
+                       : 'No veo ninguna pieza suya ofrecida.';
+        let ok = null;
+        if (s[0] !== 'ns') ok = (s[0] === 'si') === hay;
+        else html += '<br>Si dudas, ante todo calcula.';
+        return { ok: ok, html: html, res: regalos.map(v => v.sq) };
+      }
+    });
+  }
+
+  /* ---------- ROJO ---------- */
+  P2.push({
+    id: '2a', corto: '¿Mis piezas en riesgo?',
+    texto: '¿Tengo algo mío colgado o poco defendido?', tipo: 'radio', ops: SN,
+    ev: s => {
+      const hay = x.misInseg.length > 0;
+      return {
+        ok: (s[0] === 'si') === hay,
+        html: hay ? 'Mis piezas en riesgo:' + lista(x.misInseg.map(descU))
+                  : 'Todas mis piezas están cubiertas según el conteo de atacantes y defensores.',
+        res: x.misInseg.map(v => v.sq)
+      };
+    }
+  });
+
+  P2.push({
+    id: '2b', corto: '¿Sus piezas en riesgo?',
+    texto: '¿Y él? ¿Tiene algo colgado o poco defendido?', tipo: 'radio', ops: SN,
+    ev: s => {
+      const hay = x.susInseg.length > 0;
+      return {
+        ok: (s[0] === 'si') === hay,
+        html: hay ? 'Sus piezas en riesgo:' + lista(x.susInseg.map(descU)) +
+                    'Ojo: antes de capturar, ¿es un cebo?'
+                  : 'No veo piezas suyas en riesgo.',
+        res: x.susInseg.map(v => v.sq)
+      };
+    }
+  });
+
+  const opsRey = [['enr','Enrocado (o en la esquina)'],['cen','En el centro, sin enrocar'],['exp','Fuera de su casilla de origen, expuesto']];
+  P2.push({
+    id: '2c', corto: '¿Mi rey?',
+    texto: '¿Cómo está mi rey?', tipo: 'radio', ops: opsRey,
+    ev: s => {
+      const r = x.reyM;
+      let h = 'Mi rey está ' + TIPO_REY[r.tipo] + ' (' + r.sq + '). Peones delante: ' + r.esc + ' de ' + r.max + '.';
+      if (x.enJaque) h += '<br>⚠️ Estoy <b>en jaque</b> ahora mismo.';
+      return { ok: s[0] === r.tipo, html: h, res: [r.sq] };
+    }
+  });
+
+  P2.push({
+    id: '2d', corto: '¿Su rey?',
+    texto: '¿Y su rey? ¿Cómo está?', tipo: 'radio', ops: opsRey,
+    ev: s => {
+      const r = x.reyS;
+      return {
+        ok: s[0] === r.tipo,
+        html: 'Su rey está ' + TIPO_REY[r.tipo] + ' (' + r.sq + '). Peones delante: ' + r.esc + ' de ' + r.max + '.',
+        res: [r.sq]
+      };
+    }
+  });
+
+  P2.push({
+    id: '2e', corto: '¿Clavadas?',
+    texto: '¿Hay alguna clavada contra un rey?', tipo: 'radio',
+    ops: [['no','No hay clavadas'],['mias','Alguna pieza mía está clavada'],['suyas','Alguna pieza suya está clavada'],['ambas','Hay clavadas de los dos lados']],
+    ev: s => {
+      const m = x.clavM.length > 0, e = x.clavS.length > 0;
+      const exp = (m && e) ? 'ambas' : m ? 'mias' : e ? 'suyas' : 'no';
+      const f = c => cap(pz(c.type, c.sq)) + ' clavada por ' + pz(c.por.type, c.por.sq);
+      let h = (m || e) ? '' : 'No hay clavadas contra ningún rey.';
+      if (m) h += 'Mías:' + lista(x.clavM.map(f));
+      if (e) h += 'Suyas:' + lista(x.clavS.map(f));
+      h += '<br><small>Horquillas y ataques descubiertos los vigilará Stockfish en la Etapa 4.</small>';
+      return { ok: s[0] === exp, html: h, res: x.clavM.concat(x.clavS).map(c => c.sq) };
+    }
+  });
+
+  /* ---------- AMARILLO ---------- */
+  P5.push({
+    id: '5a', corto: 'Jaques',
+    texto: 'Empiezo por lo forzado. Jaques: ¿tengo alguno disponible?', tipo: 'radio',
+    ops: [['no','Ninguno'],['uno','Uno'],['varios','Varios (2 o más)']],
+    ev: s => {
+      const n = x.jaques.length;
+      const exp = n === 0 ? 'no' : n === 1 ? 'uno' : 'varios';
+      return {
+        ok: s[0] === exp,
+        html: n ? 'Mis jaques (' + n + '):' + lista(x.jaques.map(m => '<b>' + nombreJug(m.san) + '</b>')) +
+                  'Calcúlalos aunque parezcan malos.'
+                : 'No tengo ningún jaque.',
+        res: x.jaques.map(m => m.to)
+      };
+    }
+  });
+
+  P5.push({
+    id: '5b', corto: 'Capturas',
+    texto: 'Capturas: ¿tengo alguna? ¿Alguna gana material?', tipo: 'radio',
+    ops: [['no','No tengo capturas'],['mal','Tengo capturas, pero ninguna gana material'],['gana','Tengo alguna que gana material']],
+    ev: s => {
+      const cs = x.caps;
+      const gana = cs.some(c => c.net > 0);
+      const exp = !cs.length ? 'no' : gana ? 'gana' : 'mal';
+      const ord = cs.slice().sort((a, b) => b.net - a.net);
+      return {
+        ok: s[0] === exp,
+        html: cs.length ? 'Mis capturas:' + lista(ord.map(c => '<b>' + nombreJug(c.m.san) + '</b>: ' + txtNet(c.net))) + NOTA_ESTATICA
+                        : 'No tengo ninguna captura.',
+        res: cs.map(c => c.m.to)
+      };
+    }
+  });
+
+  P5.push({
+    id: '5c', corto: 'Amenazas',
+    texto: 'Amenazas: ¿puedo hacer una jugada tranquila que amenace una pieza (sin defensa o con una pieza menor)?', tipo: 'radio',
+    ops: [['si','Sí, veo alguna'],['no','No veo ninguna']],
+    ev: s => {
+      const hay = x.amen.length > 0;
+      return {
+        ok: (s[0] === 'si') === hay,
+        html: hay ? 'Jugadas que crean una amenaza sin comprometer mis piezas:' + lista(x.amen.map(descAmen)) + NOTA_ESTATICA
+                  : 'Ninguna jugada tranquila crea una amenaza clara. Piensa en mejorar tu peor pieza o en un plan.',
+        res: x.amen.slice(0, 8).map(a => a.m.to)
+      };
+    }
+  });
+
+  P5.push({
+    id: '5d', corto: 'Mis candidatas',
+    texto: 'Elijo de 2 a 4 candidatas serias. Escríbelas una por una.', tipo: 'moves', store: 'cand', max: 4,
+    ev: s => {
+      const forz = san => {
+        const m = x.legales.find(l => l.san === san);
+        const tags = [];
+        if (m && esJaque(m)) tags.push('jaque');
+        if (m && m.captured) { const c = x.caps.find(k => k.m.san === san); tags.push('captura' + (c ? ' (' + txtNet(c.net) + ')' : '')); }
+        if (x.amen.some(a => a.m.san === san)) tags.push('amenaza');
+        return { m: m, tags: tags };
+      };
+      const info = s.map(forz);
+      const hayForzDisp = x.jaques.length + x.caps.length + x.amen.length > 0;
+      const candForz = info.some(i => i.tags.length > 0);
+      const n = s.length;
+      const ok = n >= 2 && n <= 4 && (!hayForzDisp || candForz);
+      let h = 'Mis candidatas:' + lista(s.map((san, i) => '<b>' + nombreJug(san) + '</b>: ' + (info[i].tags.length ? info[i].tags.join(' + ') : 'tranquila')));
+      if (n < 2) h += '⚠️ Con una sola candidata no comparas. Busca al menos una más.<br>';
+      if (hayForzDisp && !candForz) h += '⚠️ Había jugadas forzadas disponibles y no incluiste ninguna. Revisa jaques, capturas y amenazas.<br>';
+      const olv = x.caps.filter(c => c.net > 0 && !s.includes(c.m.san));
+      if (olv.length) h += '⚠️ Capturas que ganan material y no incluiste: ' + olv.map(c => '<b>' + nombreJug(c.m.san) + '</b>').join(', ') + '.<br>';
+      if (ok && !olv.length) h += 'Buen filtro. Ahora calcúlalas tú (Violeta) y evalúalas (Turquesa).';
+      return { ok: ok, html: h, res: info.filter(i => i.m).map(i => i.m.to) };
+    }
+  });
+
+  /* ---------- GRANATE ---------- */
+  P8.push({
+    id: '8a', corto: 'Mi jugada elegida',
+    texto: 'Ya decidí. ¿Cuál es la jugada que voy a jugar?', tipo: 'moves', store: 'eleg', max: 1, quick: true,
+    ev: s => {
+      C.elegida = s[0]; C.tras = null;
+      const m = x.legales.find(l => l.san === s[0]);
+      const enC = C.cand.includes(s[0]);
+      return {
+        ok: null, tit: '📌 Jugada elegida.',
+        html: 'Voy a revisar <b>' + nombreJug(s[0]) + '</b>.' +
+              ((C.cand.length && !enC) ? '<br>Ojo: no estaba entre mis candidatas.' : ''),
+        res: m ? [m.from, m.to] : []
+      };
+    }
+  });
+
+  const sinElegir = { ok: null, html: 'Primero indica tu jugada elegida.', res: [] };
+
+  P8.push({
+    id: '8b', corto: '¿Qué puede hacer él?',
+    texto: () => 'Si juego ' + nombreJug(C.elegida || '...') + ', ¿qué puede hacer él? Marca todo lo que tenga.', tipo: 'check',
+    ops: [['jaque','Tiene jaques'],['cap','Tiene capturas que ganan material'],['amen','Tiene jugadas tranquilas que amenazan algo mío'],['nada','Ninguna de las tres']],
+    ev: s => {
+      const t = getTras();
+      if (!t) return sinElegir;
+      if (t.mate) return { ok: null, html: '¡Mi jugada da <b>jaque mate</b>!', res: [] };
+      const capG = t.caps.filter(c => c.net > 0);
+      const exp = [];
+      if (t.jaques.length) exp.push('jaque');
+      if (capG.length) exp.push('cap');
+      if (t.amen.length) exp.push('amen');
+      if (!exp.length) exp.push('nada');
+      const ok = s.length === exp.length && exp.every(v => s.includes(v));
+      let h = 'Tras <b>' + nombreJug(t.san) + '</b>, él podría:<ul>' +
+        '<li>Jaques: ' + (t.jaques.length ? t.jaques.slice(0, 6).map(m => nombreJug(m.san)).join(', ') : 'ninguno') + '</li>' +
+        '<li>Capturas que ganan material: ' + (capG.length ? capG.slice(0, 6).map(c => nombreJug(c.m.san) + ' (' + txtNet(c.net) + ')').join(', ') : 'ninguna') + '</li></ul>';
+      if (t.amen.length) h += 'Jugadas tranquilas que amenazan algo mío:' + lista(t.amen.map(descAmen), 5);
+      h += NOTA_ESTATICA;
+      return { ok: ok, html: h, res: capG.map(c => c.m.to) };
+    }
+  });
+
+  P8.push({
+    id: '8c', corto: '¿Dejo algo sin defender?',
+    texto: () => 'Tras ' + nombreJug(C.elegida || '...') + ', ¿dejo algo mío sin defender o poco defendido?', tipo: 'radio', ops: SN,
+    ev: s => {
+      const t = getTras();
+      if (!t) return sinElegir;
+      const hay = t.nuevas.length + t.viejas.length > 0;
+      let h = '';
+      if (t.nuevas.length) h += 'Riesgo <b>nuevo</b> por mi jugada:' + lista(t.nuevas.map(descU));
+      if (t.viejas.length) h += 'Sigue en riesgo (ya lo estaba):' + lista(t.viejas.map(descU));
+      if (!hay) h = 'Todo queda cubierto según el conteo de atacantes y defensores.';
+      return { ok: (s[0] === 'si') === hay, html: h, res: t.nuevas.concat(t.viejas).map(v => v.sq) };
+    }
+  });
+
+  P8.push({
+    id: '8d', corto: '¿Quito la defensa de otra pieza?',
+    texto: () => '¿' + cap(nombreJug(C.elegida || '...')) + ' quita la defensa de otra pieza mía que esté atacada?', tipo: 'radio', ops: SN,
+    ev: s => {
+      const t = getTras();
+      if (!t) return sinElegir;
+      const peligro = t.defPerd.filter(d => d.atac);
+      const hay = peligro.length > 0;
+      let h = '';
+      if (peligro.length) h += 'Pierden un defensor y están atacadas:' +
+        lista(peligro.map(d => '<b>' + cap(pz(d.type, d.sq)) + '</b>: defensores ' + d.dA + ' → ' + d.dD));
+      const otras = t.defPerd.filter(d => !d.atac);
+      if (otras.length) h += 'Pierden un defensor, pero nadie las ataca por ahora:' +
+        lista(otras.map(d => cap(pz(d.type, d.sq)) + ' (' + d.dA + ' → ' + d.dD + ')'));
+      if (!t.defPerd.length) h = 'Mi jugada no quita la defensa de ninguna otra pieza.';
+      return { ok: (s[0] === 'si') === hay, html: h, res: t.defPerd.map(d => d.sq) };
+    }
+  });
+
+  P8.push({
+    id: '8e', corto: '¿Jugada tranquila pero fuerte del rival?',
+    texto: '¿Tiene el rival una jugada tranquila pero fuerte (profilaxis, preparar un ataque, ganar tiempo)?', tipo: 'radio',
+    ops: [['si','Sí, veo una que me molestaría'],['no','No veo ninguna'],['ns','No lo sé']],
+    ev: s => ({
+      ok: null,
+      html: 'Pregunta de reflexión: no se puede comprobar solo con conteo de piezas.' +
+            '<br>Si dices «no lo sé», dedica 10 segundos a imaginar qué haría tú en su lugar.' +
+            '<br><small>Stockfish (Etapa 4) la comprobará.</small>',
+      res: []
+    })
+  });
+
+  P8.push({
+    id: '8f', corto: '¿Es mejor que mi segunda candidata?',
+    texto: '¿Mi jugada es mejor que mi segunda candidata?', tipo: 'radio',
+    ops: [['si','Sí, y sé por qué'],['no','No estoy seguro: la reviso otra vez'],['ns','No comparé']],
+    ev: s => {
+      const otras = C.cand.filter(c => c !== C.elegida);
+      let h = otras.length ? 'Mis otras candidatas: ' + otras.map(nombreJug).join(', ') + '.'
+                           : 'No anoté otra candidata: compara siempre con tu segunda mejor idea.';
+      if (s[0] !== 'si') h += '<br>Vuelve a Violeta (calcular) y Turquesa (evaluar) antes de mover.';
+      else h += '<br>Bien. Si puedes decir el porqué en una frase, es una buena señal.';
+      return { ok: null, html: h, res: [] };
+    }
+  });
+
+  return { 1: P1, 2: P2, 5: P5, 8: P8 };
+}
+
+function qtxt(q) { return typeof q.texto === 'function' ? q.texto() : q.texto; }
+
+/* ============ LÓGICA DEL COACH ============ */
+function colPaso(n) { return nivel >= 4 ? '#555555' : PASOS[n].col; }
+
+function primerPaso() {
+  for (const n of ORDEN) if (C.preg[n].length) return n;
+  return 'fin';
+}
+function sigPaso(n) {
+  const i = ORDEN.indexOf(n);
+  for (let j = i + 1; j < ORDEN.length; j++) if (C.preg[ORDEN[j]].length) return ORDEN[j];
+  return null;
+}
+
+function coachReset() {
+  C.ctx = calcCtx();
+  C.verif = {}; C.tmp = []; C.verPreg = false; C.q = 0;
+  C.cand = []; C.eleg = []; C.elegida = null; C.tras = null;
+  resaltes = {};
+  C.preg = { 1: [], 2: [], 5: [], 8: [] };
+  C.paso = 1;
+  if (C.ctx.estado === 'ok') {
+    C.preg = construirPreguntas(C.ctx);
+    C.paso = primerPaso();
+  }
+}
+
+function coachSync() {
+  const key = game.fen() + '|' + miColor + '|' + ply;
+  if (key !== C.key) { C.key = key; coachReset(); renderCoach(true); }
+  else renderCoach(false);
+}
+
+function leerSel() {
+  return Array.from(document.querySelectorAll('#coachBody input[name=op]:checked')).map(i => i.value);
+}
+
+function comprobar() {
+  const q = C.preg[C.paso][C.q];
+  if (!q || C.verif[q.id]) return;
+  const s = q.tipo === 'moves' ? C[q.store].slice() : leerSel();
+  if (!s.length) { $('aviso').textContent = q.tipo === 'moves' ? 'Añade al menos una jugada.' : 'Marca al menos una opción.'; return; }
+  const r = q.ev(s);
+  r.sel = s;
+  C.verif[q.id] = r;
+  if (r.ok !== null && ply === movs.length) sumar(C.paso, r.ok);
+  renderCoach(false);
+}
+
+function siguiente() {
+  const L = C.preg[C.paso];
+  C.tmp = []; C.verPreg = false;
+  if (C.q < L.length - 1) C.q++;
+  else {
+    const nx = sigPaso(C.paso);
+    if (nx === null) { C.paso = 'fin'; C.q = 0; }
+    else if (nx === 8 && C.paso === 5) { C.paso = 'pausa'; C.q = 0; }
+    else { C.paso = nx; C.q = 0; }
+  }
+  renderCoach(true);
+}
+
+function irPaso(n) {
+  if (!C.ctx || C.ctx.estado !== 'ok') return;
+  const L = C.preg[n];
+  if (!L || !L.length) return;
+  C.paso = n;
+  const i = L.findIndex(q => !C.verif[q.id]);
+  C.q = i < 0 ? 0 : i;
+  C.tmp = []; C.verPreg = false;
+  renderCoach(true);
+}
+function irGranate() { irPaso(8); }
+
+function toggleVer() { C.tmp = leerSel(); C.verPreg = !C.verPreg; renderCoach(false); }
+function reiniciarCoach() { coachReset(); renderCoach(true); }
+
+/* --- manejo de jugadas escritas dentro del coach --- */
+function addMov(store, max) {
+  const inp = $('candIn');
+  if (!inp) return;
+  let txt = inp.value.trim();
+  if (!txt) return;
+  txt = $('notacion').value === 'es' ? aEn(txt) : txt.replace(/0/g, 'O');
+  const g = new Chess(game.fen());
+  const m = g.move(txt, { sloppy: true });
+  if (!m) { $('aviso').textContent = 'Jugada no válida en esta posición: ' + inp.value; return; }
+  if (C[store].includes(m.san)) { $('aviso').textContent = 'Ya la tienes en la lista.'; return; }
+  if (max === 1) C[store] = [m.san];
+  else if (C[store].length >= max) { $('aviso').textContent = 'Máximo ' + max + ' jugadas.'; return; }
+  else C[store].push(m.san);
+  renderCoach(false);
+  setTimeout(() => { const e = $('candIn'); if (e) e.focus(); }, 0);
+}
+function quitarMov(store, i) { C[store].splice(i, 1); renderCoach(false); }
+function usarMov(san) { C.eleg = [san]; renderCoach(false); }
+
+function jugarElegida() {
+  if (!C.elegida || ply !== movs.length || game.turn() !== miColor) { alert('Ve al final de la partida para registrar la jugada.'); return; }
+  const m = game.move(C.elegida);
+  if (!m) return;
+  registrar(m);
+}
+
+function cambiarColor() {
+  miColor = $('miColor').value;
+  orient = miColor;
+  guardarCfg();
+  actualizar();
+}
+function cambiarNivel() { nivel = parseInt($('nivel').value); guardarCfg(); renderCoach(false); }
+
+function hablar(q) {
+  if (!$('voz').checked || !window.speechSynthesis || typeof C.paso !== 'number') return;
+  const P = PASOS[C.paso];
+  let t = '';
+  if (nivel === 1) t = P.cn + '. ' + P.gesto + '. ' + qtxt(q);
+  else if (nivel === 2) t = P.cn + '. ' + P.clave + '. ' + q.corto;
+  else if (nivel === 3) t = P.cn + '.';
+  else return;
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(t.replace(/\+/g, ' más '));
+  u.lang = 'es-ES'; u.rate = 0.95;
+  window.speechSynthesis.speak(u);
+}
+
+function renderFranja() {
+  const f = $('franja');
+  f.innerHTML = '';
+  PASOS.forEach(P => {
+    const d = document.createElement('div');
+    d.style.background = nivel >= 4 ? '#9e9e9e' : P.col;
+    const activo = ORDEN.includes(P.n);
+    d.title = P.n + ' · ' + P.cn + ' · ' + P.nom + (activo ? '' : ' (lo haces tú por ahora)');
+    if (C.ctx && C.ctx.estado === 'ok' && C.paso === P.n) d.className = 'act';
+    if (activo) { d.style.cursor = 'pointer'; d.onclick = () => irPaso(P.n); }
+    else d.style.opacity = 0.4;
+    f.appendChild(d);
+  });
+}
+
+function renderCoach(hablarAhora) {
+  const cont = $('coachBody');
+  const x = C.ctx;
+  renderFranja();
+  resaltes = {};
+
+  if (!x) { cont.innerHTML = ''; dibujarTablero(); return; }
+
+  if (x.estado === 'fin') {
+    cont.innerHTML = '<div class="info">🏁 La partida terminó.</div>';
+    dibujarTablero(); return;
+  }
+  if (x.estado === 'espera') {
+    cont.innerHTML = '<div class="info">⏳ Ahora mueve el rival (' + (game.turn() === 'w' ? 'blancas' : 'negras') +
+      ').<br>Introduce su jugada y empiezo a guiarte.<br><small>Si juegas con el otro color, cámbialo arriba en «Yo juego con».</small></div>';
+    dibujarTablero(); return;
+  }
+
+  if (C.paso === 'pausa') {
+    let h = '<div class="info"><b>⏸ Ahora piensas tú, sin ayuda.</b><br>' +
+      'Recorre con la mano estos pasos antes de decidir:' +
+      '<table class="mapa" style="margin-top:6px"><tr><th></th><th>Paso</th><th>Gesto</th><th>Pregunta</th></tr>';
+    [3, 4, 6, 7].forEach(n => {
+      const P = PASOS[n];
+      h += '<tr><td style="background:' + colPaso(n) + ';width:14px"></td><td>' + P.cn + ' · ' + P.nom + '</td><td>' + P.gesto + '</td><td>' + P.ancla + '</td></tr>';
+    });
+    h += '</table><br>Cuando tengas <b>una</b> jugada decidida, pasa a Granate (chequeo final).</div>' +
+      '<div class="botones"><button class="prim" onclick="irGranate()">Ya decidí mi jugada → Granate</button>' +
+      '<button onclick="irPaso(5)">← Volver a Amarillo</button></div>';
+    cont.innerHTML = h;
+    dibujarTablero(); return;
+  }
+
+  if (C.paso === 'fin') {
+    let ok = 0, mal = 0, neu = 0;
+    ORDEN.forEach(n => C.preg[n].forEach(q => {
+      const v = C.verif[q.id]; if (!v) return;
+      if (v.ok === true) ok++; else if (v.ok === false) mal++; else neu++;
+    }));
+    let h = '<div class="info"><b>✔ Sistema completado: Azul, Rojo, Amarillo y Granate.</b><br>' +
+      'Aciertos: ' + ok + ' · A revisar: ' + mal + ' · Reflexión: ' + neu;
+    if (C.elegida) h += '<br><br>Mi jugada: <b>' + nombreJug(C.elegida) + '</b>.';
+    h += '<br><small>Recuerda: estas comprobaciones son estáticas. Stockfish llega en la Etapa 4.</small></div><div class="botones">';
+    if (C.elegida && ply === movs.length && game.turn() === miColor)
+      h += '<button class="prim" onclick="jugarElegida()">▶ Jugar ' + nombreJug(C.elegida) + ' en el tablero</button>';
+    h += '<button onclick="reiniciarCoach()">Repetir esta posición</button></div>';
+    cont.innerHTML = h;
+    dibujarTablero(); return;
+  }
+
+  const L = C.preg[C.paso];
+  const q = L[C.q];
+  const P = PASOS[C.paso];
+  const v = C.verif[q.id];
+  const col = colPaso(C.paso);
+  const txtCol = (C.paso === 5 && nivel < 4) ? '#222' : '#fff';
+
+  let cab = '';
+  if (nivel === 1) cab = '<b>' + P.cn + ' · Paso ' + P.n + ' · ' + P.nom + '</b><span>🤏 ' + P.gesto + '</span><span>Clave: ' + P.clave + '</span>';
+  else if (nivel === 2) cab = '<b>' + P.cn + '</b><span>Clave: ' + P.clave + '</span>';
+  else if (nivel === 3) cab = '<b>' + P.cn + '</b>';
+  else cab = '<b>·</b>';
+
+  let pregHtml;
+  if (nivel === 1) pregHtml = qtxt(q);
+  else if (nivel === 2) pregHtml = q.corto;
+  else if (C.verPreg || v) pregHtml = q.corto;
+  else pregHtml = '<button onclick="toggleVer()">👁 Ver la pregunta</button>';
+
+  let ops = '';
+  if (q.tipo === 'moves') {
+    const lst = v ? v.sel : C[q.store];
+    ops = '<div>' + lst.map((s, i) => '<span class="chipm">' + nombreJug(s) +
+      (v ? '' : ' <a onclick="quitarMov(\'' + q.store + '\',' + i + ')">×</a>') + '</span>').join('') + '</div>';
+    if (!v) {
+      const llamada = 'addMov(\'' + q.store + '\',' + q.max + ')';
+      ops += '<div class="fila" style="margin-top:6px"><input type="text" id="candIn" placeholder="Escribe una jugada (ej: ' +
+        ($('notacion').value === 'es' ? 'Cf3' : 'Nf3') + ')" onkeydown="if(event.key===\'Enter\'){' + llamada + '}">' +
+        '<button class="prim" onclick="' + llamada + '">Añadir</button></div>';
+      if (q.quick && C.cand.length) {
+        ops += '<div style="margin-top:6px"><small>Usar una de mis candidatas:</small><br>' +
+          C.cand.map(s => '<button onclick="usarMov(\'' + s + '\')">' + nombreJug(s) + '</button>').join(' ') + '</div>';
+      }
+      ops += '<small>' + (q.max > 1 ? 'Llevas ' + C[q.store].length + ' de ' + q.max + ' (ideal: 2 a 4).' : 'Una sola jugada.') + '</small>';
+    }
+  } else {
+    const selecc = v ? v.sel : C.tmp;
+    const tipoIn = q.tipo === 'radio' ? 'radio' : 'checkbox';
+    ops = q.ops.map(o => '<label><input type="' + tipoIn + '" name="op" value="' + o[0] + '"' +
+      (selecc.includes(o[0]) ? ' checked' : '') + (v ? ' disabled' : '') + '> ' + o[1] + '</label>').join('');
+  }
+
+  let fb = '', botones = '';
+  if (v) {
+    const cls = v.ok === true ? 'ok' : v.ok === false ? 'mal' : 'neu';
+    const tit = v.tit ? v.tit : (v.ok === true ? '✅ Correcto.' : v.ok === false ? '⚠️ Revisa:' : '💭 Reflexión (no puntúa).');
+    fb = '<div class="fb ' + cls + '"><b>' + tit + '</b><br>' + v.html + '</div>';
+    let etiqueta = 'Siguiente →';
+    if (C.q === L.length - 1) {
+      const nx = sigPaso(C.paso);
+      if (nx === null) etiqueta = 'Terminar →';
+      else if (C.paso === 5) etiqueta = '⏸ Pausa: pensar yo →';
+      else etiqueta = 'Pasar a ' + PASOS[nx].cn + ' (' + PASOS[nx].nom + ') →';
+    }
+    botones = '<button class="prim" onclick="siguiente()">' + etiqueta + '</button>';
+    v.res.forEach(sq => { resaltes[sq] = col; });
+  } else {
+    botones = '<button class="prim" onclick="comprobar()">Comprobar</button>';
+  }
+
+  let ultTxt = '';
+  if (x.ult) ultTxt = '<div style="font-size:13px;margin-bottom:4px">Jugada del rival: <b>' + nombreJug(x.ult.san) + '</b></div>';
+  else if (C.paso === 2 && !C.preg[1].length) ultTxt = '<div style="font-size:13px;margin-bottom:4px"><small>No hay jugada previa del rival: empiezo directo por Seguridad.</small></div>';
+
+  cont.innerHTML =
+    '<div class="banda" style="background:' + col + ';color:' + txtCol + '">' + cab + '</div>' +
+    '<div class="cuerpo" style="border-color:' + col + '">' + ultTxt +
+    '<div class="num">Pregunta ' + (C.q + 1) + ' de ' + L.length + '</div>' +
+    '<div class="preg">' + pregHtml + '</div>' +
+    '<div class="ops">' + ops + '</div>' +
+    '<div class="aviso" id="aviso"></div>' + fb +
+    '<div class="botones">' + botones + '</div></div>';
+
+  dibujarTablero();
+  if (hablarAhora) hablar(q);
+}
+
+/* ============ ESTADÍSTICAS Y CONFIGURACIÓN ============ */
+function stats() { try { return JSON.parse(localStorage.getItem('coachStats')) || {}; } catch (e) { return {}; } }
+function sumar(paso, ok) {
+  const s = stats();
+  s[paso] = s[paso] || { ok: 0, mal: 0 };
+  if (ok) s[paso].ok++; else s[paso].mal++;
+  try { localStorage.setItem('coachStats', JSON.stringify(s)); } catch (e) {}
+  renderStats();
+}
+function renderStats() {
+  const s = stats();
+  let h = '';
+  ORDEN.forEach(n => {
+    const e = s[n] || { ok: 0, mal: 0 };
+    const t = e.ok + e.mal;
+    h += '<div style="margin:4px 0"><span class="chip" style="background:' + PASOS[n].col + '"></span> ' +
+         PASOS[n].cn + ' (' + PASOS[n].nom + '): ' +
+         (t ? e.ok + ' de ' + t + ' (' + Math.round(100 * e.ok / t) + '%)' : 'sin datos') + '</div>';
+  });
+  $('stats').innerHTML = h;
+}
+function borrarStats() {
+  if (!confirm('¿Borrar toda la estadística?')) return;
+  try { localStorage.removeItem('coachStats'); } catch (e) {}
+  renderStats();
+}
+function cargarCfg() {
+  try {
+    const c = JSON.parse(localStorage.getItem('coachCfg') || '{}');
+    if (c.color) miColor = c.color;
+    if (c.nivel) nivel = c.nivel;
+    if (c.voz) $('voz').checked = true;
+  } catch (e) {}
+  $('miColor').value = miColor;
+  $('nivel').value = String(nivel);
+  orient = miColor;
+}
+function guardarCfg() {
+  try { localStorage.setItem('coachCfg', JSON.stringify({ color: miColor, nivel: nivel, voz: $('voz').checked })); } catch (e) {}
+}
+
+function construirMapa() {
+  let h = '<table class="mapa"><tr><th></th><th>Paso</th><th>Gesto (mano izquierda)</th><th>Clave</th><th>Pregunta ancla</th></tr>';
+  PASOS.forEach(P => {
+    h += '<tr><td style="background:' + P.col + ';width:14px"></td><td>' + P.n + ' ' + P.cn + ' · ' + P.nom + '</td><td>' +
+         P.gesto + '</td><td>' + P.clave + '</td><td>' + P.ancla + '</td></tr>';
+  });
+  h += '<tr><td style="background:#b3261e"></td><td>🚨 Emergencia</td><td>Puño suave, pulgar dentro, apretar una vez</td><td>Stop</td><td>Las 3 preguntas de emergencia</td></tr></table>';
+  $('mapa').innerHTML = h;
+}
+
+/* ============ TECLADO ============ */
+$('entrada').addEventListener('keydown', e => { if (e.key === 'Enter') anadir(); });
+document.addEventListener('keydown', e => {
+  const tag = document.activeElement.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  if (e.key === 'ArrowLeft') irA(ply - 1);
+  if (e.key === 'ArrowRight') irA(ply + 1);
+});
+
+/* ============ ARRANQUE ============ */
+cargarCfg();
+construirMapa();
+renderStats();
+reconstruir();
+actualizar();
+</script>
+
+<style>
+  html, body { overflow-anchor: none; }  /* evita saltos automáticos de scroll */
+  @media (min-width: 800px) {
+    .col-tablero-fija {
+      position: sticky;
+      top: 0;
+      align-self: start;   /* no se centra ni se estira con la otra columna */
+    }
+    .col-panel-minimo {
+      min-height: 100vh;   /* el panel nunca queda más corto que la pantalla */
+    }
+  }
+</style>
+<script>
+(function () {
+  var t = document.getElementById('tablero');
+  if (!t) return;
+  var col = t.parentElement;
+  col.classList.add('col-tablero-fija');
+  var hermanos = col.parentElement ? col.parentElement.children : [];
+  for (var i = 0; i < hermanos.length; i++) {
+    if (hermanos[i] !== col) hermanos[i].classList.add('col-panel-minimo');
+  }
+})();
+</script>
+
+</body>
+</html>
