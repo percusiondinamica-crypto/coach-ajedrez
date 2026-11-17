@@ -1154,9 +1154,16 @@ function usarMov(san) { C.eleg = [san]; renderCoach(false); }
 
 function jugarElegida() {
   if (!C.elegida || ply !== movs.length || game.turn() !== miColor) { alert('Ve al final de la partida para registrar la jugada.'); return; }
+  if (window.AyudaSF) { AyudaSF.revisar(game.fen(), C.elegida, jugarElegidaYa); }
+  else { jugarElegidaYa(); }
+}
+
+function jugarElegidaYa() {
+  if (!C.elegida || game.turn() !== miColor) return;
   const m = game.move(C.elegida);
   if (!m) return;
   registrar(m);
+  if (window.AyudaSF) AyudaSF.despues();
 }
 
 function cambiarColor() {
@@ -1553,7 +1560,155 @@ actualizar();
         sig();
       }).catch(function (e) { say(txt + '\nError: ' + e.message); });
     })();
+    };
+  window.SF = { analizar: analizar, lineaSan: lineaSan, evalTxt: evalTxt };
+})();
+<script>
+(function () {
+  var KEY = 'coachAyudaSF';
+  var UMBRAL = 150;      // caída en centipeones que dispara la alarma (150 = 1,5 peones)
+  var TOPE = 600;        // las evaluaciones se recortan a ±6 peones para no alarmar por nada
+  var nivel = 1;
+  try { nivel = parseInt(localStorage.getItem(KEY) || '1', 10); } catch (e) {}
+  if (!(nivel >= 1 && nivel <= 4)) nivel = 1;
+  var token = 0, ocupado = false, ultimo = null;
+
+  // ---------- selector de nivel ----------
+  var base = document.getElementById('sfA');
+  var host = base ? base.parentElement : document.body;
+  var sel = document.createElement('div');
+  sel.style.cssText = 'margin:8px 0;padding:6px;border:1px solid #bbb;border-radius:6px;background:#fff';
+  sel.innerHTML = '<b>Nivel de ayuda:</b> <select id="sfNivel" style="font-size:14px">' +
+    '<option value="1">1 · Solo preguntas (sin Stockfish)</option>' +
+    '<option value="2">2 · Verificar mis respuestas (aún no: actúa como 1)</option>' +
+    '<option value="3">3 · Chequeo final antes de jugar</option>' +
+    '<option value="4">4 · Chequeo + revelar línea tras mover</option></select>';
+  host.insertBefore(sel, host.children[1] || null);
+  var s = sel.querySelector('#sfNivel');
+  s.value = String(nivel);
+  s.onchange = function () {
+    nivel = parseInt(s.value, 10);
+    try { localStorage.setItem(KEY, String(nivel)); } catch (e) {}
   };
+
+  // ---------- ventana emergente ----------
+  var vel = document.createElement('div');
+  vel.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.55);' +
+                      'display:none;align-items:center;justify-content:center;z-index:9999';
+  var caja = document.createElement('div');
+  caja.style.cssText = 'background:#fff;color:#111;max-width:440px;margin:12px;padding:16px;' +
+                       'border-radius:10px;font-size:16px;line-height:1.4;font-family:sans-serif';
+  vel.appendChild(caja);
+  document.body.appendChild(vel);
+
+  function mostrar(html, botones) {
+    caja.innerHTML = '<div>' + html + '</div>';
+    var fila = document.createElement('div');
+    fila.style.cssText = 'margin-top:12px;display:flex;gap:8px;flex-wrap:wrap';
+    (botones || []).forEach(function (b) {
+      var x = document.createElement('button');
+      x.textContent = b.t;
+      x.style.cssText = 'font-size:15px;padding:7px 12px';
+      x.onclick = b.fn;
+      fila.appendChild(x);
+    });
+    caja.appendChild(fila);
+    vel.style.display = 'flex';
+  }
+  function cerrar() { vel.style.display = 'none'; }
+
+  // ---------- tarjeta del nivel 4 ----------
+  var tarj = document.createElement('div');
+  tarj.style.cssText = 'position:fixed;right:10px;bottom:10px;max-width:360px;background:#fff;color:#111;' +
+    'border:2px solid #444;border-radius:8px;padding:10px 12px;font-size:14px;line-height:1.4;' +
+    'z-index:9998;display:none;font-family:sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.35)';
+  document.body.appendChild(tarj);
+
+  // ---------- evaluaciones desde MI lado ----------
+  function valor(r, color) {
+    var v = 0;
+    if (r.mate !== null) v = (r.mate > 0 ? 1 : -1) * 10000;
+    else if (r.cp !== null) v = r.cp;
+    if (color === 'b') v = -v;
+    return Math.max(-TOPE, Math.min(TOPE, v));
+  }
+  function texto(r, color) {
+    var sg = (color === 'w') ? 1 : -1;
+    if (r.mate !== null) {
+      return (r.mate * sg > 0 ? 'mate a tu favor en ' : 'mate en tu contra en ') + Math.abs(r.mate);
+    }
+    if (r.cp === null) return '?';
+    var v = r.cp * sg / 100;
+    return (v > 0 ? '+' : '') + v.toFixed(2);
+  }
+
+  // ---------- revisión antes de jugar (niveles 3 y 4) ----------
+  function revisar(fen, elegida, cb) {
+    ultimo = null;
+    if (nivel < 3 || !window.SF) { cb(true); return; }
+    if (ocupado) return;
+    var g = new Chess(fen), mv = g.move(elegida);
+    if (!mv || g.game_over()) { cb(true); return; }
+    var fenD = g.fen(), color = fen.split(' ')[1], mi = ++token;
+    ocupado = true;
+    mostrar('<b>Stockfish está revisando tu jugada…</b><br>Unos 6 segundos. Mientras tanto, piensa: ¿qué puede hacer él?',
+      [{ t: 'Cancelar', fn: function () { token++; ocupado = false; cerrar(); } }]);
+
+    function seguir() {
+      cerrar();
+      if (game.fen() !== fen) return;        // la posición cambió mientras esperabas
+      cb(true);
+    }
+
+    SF.analizar(fen, 2500).then(function (a) {
+      if (mi !== token) throw 'cancelado';
+      return SF.analizar(fenD, 2500).then(function (d) { return [a, d]; });
+    }).then(function (par) {
+      if (mi !== token) return;
+      ocupado = false;
+      var a = par[0], d = par[1];
+      ultimo = { fen: fen, mv: mv, a: a, d: d, color: color };
+      var caida = valor(a, color) - valor(d, color);
+      if (caida >= UMBRAL) {
+        mostrar('<b>⚠ Alarma de Stockfish</b><br>Con esa jugada tu evaluación baja de <b>' + texto(a, color) +
+          '</b> a <b>' + texto(d, color) + '</b>.<br>Puede haber algo que no viste. ' +
+          'Vuelve a Granate: <i>8b ¿qué puede hacer él?</i> y <i>8c ¿dejo algo sin defender?</i>',
+          [{ t: 'Cambiar de jugada', fn: function () { ultimo = null; cerrar(); } },
+           { t: 'Jugarla igual', fn: seguir }]);
+      } else {
+        seguir();
+      }
+    }).catch(function (e) {
+      if (mi !== token) return;
+      ocupado = false;
+      mostrar('No pude consultar a Stockfish (' + ((e && e.message) || e) + ').',
+        [{ t: 'Jugar sin revisar', fn: seguir }, { t: 'Cancelar', fn: cerrar }]);
+    });
+  }
+
+  // ---------- revelación después de mover (nivel 4) ----------
+  function despues() {
+    if (nivel < 4 || !ultimo || !window.SF) return;
+    var u = ultimo; ultimo = null;
+    var miUci = u.mv.from + u.mv.to + (u.mv.promotion || '');
+    var miSan = SF.lineaSan(u.fen, [miUci], 1)[0] || u.mv.san;
+    var mejor = SF.lineaSan(u.fen, [u.a.best], 1)[0] || u.a.best;
+    var linea = SF.lineaSan(u.fen, u.a.pv, 6).join(' ');
+    var h = '<b>Stockfish, ahora que ya moviste</b><br>' +
+      'Tu jugada: <b>' + miSan + '</b> (' + texto(u.d, u.color) + ')<br>';
+    if (u.a.best === miUci) h += '✔ Coincidió con su primera opción.<br>';
+    else h += 'Su preferida: <b>' + mejor + '</b> (' + texto(u.a, u.color) + ')<br>Línea: ' + linea + '<br>';
+    h += '<span style="color:#666">Profundidad ' + u.a.depth + ': orientativo, no es sentencia.</span> ';
+    tarj.innerHTML = h;
+    var x = document.createElement('button');
+    x.textContent = 'Cerrar';
+    x.style.cssText = 'font-size:13px;padding:3px 8px;margin-top:6px;display:block';
+    x.onclick = function () { tarj.style.display = 'none'; };
+    tarj.appendChild(x);
+    tarj.style.display = 'block';
+  }
+
+  window.AyudaSF = { revisar: revisar, despues: despues, nivel: function () { return nivel; } };
 })();
 </script>
 
