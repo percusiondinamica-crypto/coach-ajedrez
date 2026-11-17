@@ -1417,5 +1417,145 @@ actualizar();
 })();
 </script>
 
+<script>
+(function () {
+  var URL_SF = 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js';
+  var worker = null, cargando = null, cola = Promise.resolve();
+
+  function cargar() {
+    if (cargando) return cargando;
+    cargando = fetch(URL_SF)
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+      .then(function (txt) {
+        var blob = new Blob([txt], { type: 'application/javascript' });
+        worker = new Worker(URL.createObjectURL(blob));
+        return new Promise(function (ok, mal) {
+          worker.onerror = function () { mal(new Error('error del motor')); };
+          worker.onmessage = function (e) {
+            if (e.data === 'uciok') worker.postMessage('isready');
+            if (e.data === 'readyok') ok();
+          };
+          worker.postMessage('uci');
+        });
+      });
+    cargando.catch(function () { cargando = null; });
+    return cargando;
+  }
+
+  function resumen(best, info, fen) {
+    var turno = fen.split(' ')[1];
+    var r = { best: best.split(' ')[1], depth: 0, cp: null, mate: null, pv: [] };
+    if (info) {
+      var d = info.match(/ depth (\d+)/);
+      if (d) r.depth = +d[1];
+      var m = info.match(/ score (cp|mate) (-?\d+)/);
+      if (m) {
+        var v = +m[2];
+        if (turno === 'b') v = -v;           // siempre desde las blancas
+        if (m[1] === 'cp') r.cp = v; else r.mate = v;
+      }
+      var p = info.split(' pv ')[1];
+      if (p) r.pv = p.trim().split(' ');
+    }
+    return r;
+  }
+
+  function analizar(fen, ms) {
+    var p = cola.then(cargar).then(function () {
+      return new Promise(function (ok, mal) {
+        var ult = null;
+        var t = setTimeout(function () { mal(new Error('sin respuesta')); }, ms + 20000);
+        worker.onmessage = function (e) {
+          var l = (typeof e.data === 'string') ? e.data : '';
+          if (l.indexOf('info') === 0 && l.indexOf(' score ') > 0 && l.indexOf(' pv ') > 0) ult = l;
+          if (l.indexOf('bestmove') === 0) { clearTimeout(t); ok(resumen(l, ult, fen)); }
+        };
+        worker.postMessage('position fen ' + fen);
+        worker.postMessage('go movetime ' + ms);
+      });
+    });
+    cola = p.catch(function () {});
+    return p;
+  }
+
+  function sanEs(s) {
+    return s.replace(/[KQRBN]/g, function (c) { return { K: 'R', Q: 'D', R: 'T', B: 'A', N: 'C' }[c]; });
+  }
+  function lineaSan(fen, pv, n) {
+    var g = new Chess(fen), out = [];
+    for (var i = 0; i < pv.length && i < n; i++) {
+      var u = pv[i], mv = { from: u.slice(0, 2), to: u.slice(2, 4) };
+      if (u.length > 4) mv.promotion = u[4];
+      var m = g.move(mv);
+      if (!m) break;
+      out.push(sanEs(m.san));
+    }
+    return out;
+  }
+  function evalTxt(r) {
+    if (r.mate !== null) return 'mate en ' + Math.abs(r.mate) + ' para ' + (r.mate > 0 ? 'blancas' : 'negras');
+    if (r.cp === null) return '?';
+    return (r.cp > 0 ? '+' : '') + (r.cp / 100).toFixed(2) + ' (desde las blancas)';
+  }
+
+  // ---------- panel ----------
+  var panel = document.createElement('div');
+  panel.style.cssText = 'margin-top:10px;padding:10px;border:2px solid #444;border-radius:8px;' +
+                        'font-size:14px;background:#fafafa;color:#111';
+  panel.innerHTML =
+    '<b>Stockfish (verificador)</b><br>' +
+    '<button id="sfA" style="font-size:15px;padding:5px 10px">Analizar esta posición</button> ' +
+    '<button id="sfT" style="font-size:15px;padding:5px 10px">Prueba de cordura</button><br>' +
+    '<label><input type="checkbox" id="sfM"> Mostrar la mejor jugada</label>' +
+    '<pre id="sfS" style="white-space:pre-wrap;margin:8px 0 0;font-size:13px;font-family:monospace">' +
+    'Listo. La primera vez tarda unos segundos en cargar el motor.</pre>';
+  var tab = document.getElementById('tablero');
+  (tab && tab.parentElement ? tab.parentElement : document.body).appendChild(panel);
+
+  var salida = panel.querySelector('#sfS');
+  function say(t) { salida.textContent = t; }
+
+  panel.querySelector('#sfA').onclick = function () {
+    var fen;
+    try { fen = game.fen(); } catch (e) { say('No encuentro la partida (game).'); return; }
+    if (game.game_over()) { say('La partida ya terminó.'); return; }
+    say('Stockfish pensando… (3 s)\nPosición: ' + fen);
+    analizar(fen, 3000).then(function (r) {
+      var t = 'Turno: ' + (fen.split(' ')[1] === 'w' ? 'blancas' : 'negras') +
+              '\nEvaluación: ' + evalTxt(r) + '   (profundidad ' + r.depth + ')';
+      if (panel.querySelector('#sfM').checked) {
+        t += '\nMejor jugada: ' + lineaSan(fen, [r.best], 1).join('') +
+             '\nLínea: ' + lineaSan(fen, r.pv, 6).join(' ');
+      }
+      say(t + '\n\nFEN usada: ' + fen);
+    }).catch(function (e) { say('Error: ' + e.message); });
+  };
+
+  var PRUEBAS = [
+    { nom: 'Dama negra colgada en h4 (blancas juegan)',
+      fen: 'rnb1kbnr/pppp1ppp/8/4p3/4P2q/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 3', esp: 'f3h4' },
+    { nom: 'Mate en 1 (Ta8#)',
+      fen: '6k1/5ppp/8/8/8/8/8/R3K3 w - - 0 1', esp: 'a1a8' },
+    { nom: 'Posición inicial (solo mirar el número)',
+      fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', esp: null }
+  ];
+  panel.querySelector('#sfT').onclick = function () {
+    var txt = 'Prueba de cordura…\n';
+    say(txt + '(tarda unos 10 segundos)');
+    var i = 0;
+    (function sig() {
+      if (i >= PRUEBAS.length) { say(txt + '\nListo.'); return; }
+      var pr = PRUEBAS[i++];
+      analizar(pr.fen, 3000).then(function (r) {
+        var res = pr.esp === null ? '' : (r.best === pr.esp ? '  -> BIEN' : '  -> MAL (esperaba ' + pr.esp + ')');
+        txt += '\n' + pr.nom + '\n  jugada: ' + r.best + '  eval: ' + evalTxt(r) + res + '\n';
+        say(txt + '\n(sigo…)');
+        sig();
+      }).catch(function (e) { say(txt + '\nError: ' + e.message); });
+    })();
+  };
+})();
+</script>
+
 </body>
 </html>
