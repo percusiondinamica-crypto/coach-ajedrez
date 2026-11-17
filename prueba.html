@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Prueba Stockfish</title>
+<style>
+  body{font-family:sans-serif;max-width:700px;margin:20px auto;padding:0 12px}
+  #log{background:#111;color:#0f0;padding:10px;white-space:pre-wrap;
+       font-family:monospace;min-height:200px;font-size:13px}
+  button{font-size:18px;padding:8px 18px}
+</style>
+</head>
+<body>
+<h2>Prueba de Stockfish</h2>
+<button id="b">Probar</button>
+<div id="log"></div>
+
+<script>
+var FUENTES = [
+  './stockfish.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js',
+  'https://cdn.jsdelivr.net/npm/stockfish.js@10.0.2/stockfish.js',
+  'https://unpkg.com/stockfish.js@10.0.2/stockfish.js'
+];
+var logEl = document.getElementById('log');
+function log(t){ logEl.textContent += t + '\n'; }
+
+function probar(w){
+  return new Promise(function(ok, mal){
+    var ultima = '';
+    var t = setTimeout(function(){ mal(new Error('sin respuesta en 60 s')); }, 60000);
+    w.onerror = function(e){ clearTimeout(t); mal(new Error('error del worker: ' + (e.message||''))); };
+    w.onmessage = function(e){
+      var l = (typeof e.data === 'string') ? e.data : '';
+      if (l.indexOf('info depth') === 0) ultima = l;
+      if (l === 'uciok'){ log('  uciok recibido'); w.postMessage('isready'); }
+      if (l === 'readyok'){ log('  readyok recibido, analizando posicion inicial...');
+        w.postMessage('position startpos');
+        w.postMessage('go depth 12'); }
+      if (l.indexOf('bestmove') === 0){ clearTimeout(t); log('  ultima info: ' + ultima); ok(l); }
+    };
+    w.postMessage('uci');
+  });
+}
+
+async function cargar(){
+  logEl.textContent = '';
+  for (var i = 0; i < FUENTES.length; i++){
+    var url = FUENTES[i];
+    try {
+      log('Intento: ' + url);
+      var r = await fetch(url);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var txt = await r.text();
+      if (txt.length < 100000) throw new Error('archivo demasiado chico (' + txt.length + ')');
+      log('  descargado: ' + Math.round(txt.length/1024) + ' KB');
+      var blob = new Blob([txt], {type:'application/javascript'});
+      var w = new Worker(URL.createObjectURL(blob));
+      var res = await probar(w);
+      log('  RESULTADO: ' + res);
+      log('\nFUNCIONA con: ' + url);
+      return;
+    } catch(e){
+      log('  fallo: ' + e.message);
+    }
+  }
+  log('\nNinguna fuente funcionó.');
+}
+document.getElementById('b').onclick = cargar;
+</script>
+</body>
+</html>
