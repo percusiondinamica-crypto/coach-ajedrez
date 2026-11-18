@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Mi Coach de Ajedrez - Etapa 3b</title>
+<title>Mi Coach de Ajedrez</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <style>
   * { box-sizing: border-box; }
+  html, body { overflow-anchor: none; }
   body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 12px;
          background: #f4f4f6; color: #222; }
   h1 { font-size: 18px; margin: 0 0 8px; color: #1f3a5f; }
@@ -16,6 +17,10 @@
   .layout { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
   .col-tablero { width: min(92vw, 480px); }
   .col-panel { flex: 1; min-width: 300px; max-width: 560px; }
+  @media (min-width: 800px) {
+    .col-tablero-fija { position: sticky; top: 0; align-self: start; }
+    .col-panel-minimo { min-height: 100vh; }
+  }
 
   #tablero { display: grid;
              grid-template-columns: repeat(8, minmax(0, 1fr));
@@ -90,15 +95,18 @@
   table.mapa { width: 100%; border-collapse: collapse; font-size: 12px; }
   table.mapa td, table.mapa th { border: 1px solid #ccc; padding: 3px 5px; text-align: left; }
   table.mapa th { background: #e8eef6; }
+
+  /* Stockfish */
+  #sfS { white-space: pre-wrap; margin: 8px 0 0; font-size: 13px; font-family: monospace; }
 </style>
 </head>
 <body>
 
-<h1>♟ Mi Coach de Ajedrez · Etapa 3b: Azul, Rojo, Amarillo y Granate</h1>
+<h1>♟ Mi Coach de Ajedrez</h1>
 <div class="colores" id="franja"></div>
 
 <div class="layout">
-  <div class="col-tablero">
+  <div class="col-tablero col-tablero-fija">
     <div id="tablero"></div>
     <div class="estado" id="estado"></div>
     <div class="botones">
@@ -111,7 +119,7 @@
     </div>
   </div>
 
-  <div class="col-panel">
+  <div class="col-panel col-panel-minimo">
 
     <div class="caja">
       <div class="cfg">
@@ -149,6 +157,25 @@
       </div>
       <div class="msg" id="msg"></div>
       <small>Orden: 1) escribe la jugada del rival, 2) el coach te guía, 3) juegas tu jugada en Lucas Chess y la registras aquí (o con el botón del final del coach).</small>
+    </div>
+
+    <div class="caja" id="cajaSF">
+      <h2>♞ Stockfish: nivel de ayuda</h2>
+      <select id="sfNivel">
+        <option value="1">1 · Solo preguntas (sin Stockfish)</option>
+        <option value="2">2 · Verificar mis candidatas (Amarillo)</option>
+        <option value="3">3 · Chequeo final antes de jugar</option>
+        <option value="4">4 · Chequeo + revelar línea tras mover</option>
+      </select>
+      <details style="margin-top:8px">
+        <summary style="cursor:pointer;font-weight:bold;color:#1f3a5f;font-size:14px">Herramientas de análisis</summary>
+        <div class="botones">
+          <button id="sfA">Analizar esta posición</button>
+          <button id="sfT">Prueba de cordura</button>
+        </div>
+        <label style="font-size:13px"><input type="checkbox" id="sfM"> Mostrar la mejor jugada</label>
+        <pre id="sfS">Listo. La primera vez tarda unos segundos en cargar el motor.</pre>
+      </details>
     </div>
 
     <div class="caja">
@@ -206,7 +233,7 @@ const PASOS = [
   {n:7, nom:'Evaluar',    col:'#18a6a6', cn:'Turquesa', gesto:'Pulgar + falange del anular',  clave:'M.R.A.E.I.',      ancla:'¿Quién está mejor?'},
   {n:8, nom:'Chequeo',    col:'#7a1f33', cn:'Granate',  gesto:'Pulgar + falange del meñique', clave:'Ojo',             ancla:'¿Qué puede hacer él? ¿Dejo algo?'}
 ];
-const ORDEN = [1, 2, 5, 8];
+const ORDEN = [1, 2, 3, 4, 5, 8];
 const VAL = {p:1, n:3, b:3, r:5, q:9, k:100};
 const NOM = {p:'peón', n:'caballo', b:'alfil', r:'torre', q:'dama', k:'rey'};
 const ART = {p:'el', n:'el', b:'el', r:'la', q:'la', k:'el'};
@@ -229,7 +256,7 @@ let resaltes = {};
 /* ============ ESTADO DEL COACH ============ */
 let miColor = 'w';
 let nivel = 1;
-let C = { key: null, ctx: null, preg: {1:[],2:[],5:[],8:[]}, paso: 1, q: 0, verif: {}, tmp: [],
+let C = { key: null, ctx: null, preg: {1:[],2:[],3:[],4:[],5:[],8:[]}, paso: 1, q: 0, verif: {}, tmp: [],
           verPreg: false, cand: [], eleg: [], elegida: null, tras: null };
 
 /* ============ NOTACIÓN ============ */
@@ -441,6 +468,7 @@ function copiar(id) {
 
 /* ============ GEOMETRÍA: ATAQUES Y DEFENSAS ============ */
 function sqName(r, c) { return 'abcdefgh'[c] + (8 - r); }
+function colRC(sq) { return { r: 8 - parseInt(sq[1], 10), c: 'abcdefgh'.indexOf(sq[0]) }; }
 
 function libre(b, r, c, tr, tc) {
   const sr = Math.sign(tr - r), sc = Math.sign(tc - c);
@@ -559,11 +587,11 @@ function hipotesisRival() {
   return { jaques: ms.filter(m => /[+#]/.test(m.san)), caps: ms.filter(m => m.captured) };
 }
 
-/* ============ TÁCTICA: CAPTURAS, AMENAZAS (usa chess.js con reglas reales) ============ */
+/* ============ TÁCTICA: CAPTURAS Y AMENAZAS (usa chess.js con reglas reales) ============ */
 const estricta = u => u.motivo === 'colgada' || u.motivo === 'menor';
 function esJaque(m) { return /[+#]/.test(m.san); }
 
-/* Mejor ganancia neta para el bando que mueve capturando en 'sq' (cambios sucesivos, siempre con la pieza más barata) */
+/* Mejor ganancia neta para quien captura en 'sq' (cambios sucesivos, siempre con la pieza más barata) */
 function seeVal(g, sq, prof) {
   if (prof > 8) return 0;
   const caps = g.moves({ verbose: true }).filter(m => m.to === sq && m.captured);
@@ -583,7 +611,7 @@ function netoCap(g, m) {
   return VAL[m.captured] - r;
 }
 
-/* Jugadas tranquilas de 'color' (le toca mover en g) que crean una amenaza nueva y clara, sin dejar piezas propias en riesgo */
+/* Jugadas tranquilas de 'color' que crean una amenaza nueva y clara, sin dejar piezas propias en riesgo */
 function amenazasDe(g, color) {
   const rv = color === 'w' ? 'b' : 'w';
   const antes = insegurasDe(g.board(), rv).filter(estricta).map(u => u.sq);
@@ -603,6 +631,117 @@ function amenazasDe(g, color) {
   res.sort((a, b) => val(b) - val(a));
   return res;
 }
+
+/* ============ ESTRATEGIA: material, desarrollo, rey, centro, movilidad, roturas ============ */
+function materialDe(b, color) {
+  let t = 0;
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = b[r][c];
+    if (p && p.color === color && p.type !== 'k') t += VAL[p.type];
+  }
+  return t;
+}
+
+const CASA_INI = {
+  w: [['b1','n'], ['g1','n'], ['c1','b'], ['f1','b']],
+  b: [['b8','n'], ['g8','n'], ['c8','b'], ['f8','b']]
+};
+function desarrolloDe(b, color) {
+  let casa = 0;
+  CASA_INI[color].forEach(z => {
+    const rc = colRC(z[0]);
+    const p = b[rc.r][rc.c];
+    if (p && p.color === color && p.type === z[1]) casa++;
+  });
+  const enr = estadoRey(b, color).tipo === 'enr';
+  return { casa: casa, enr: enr, punt: -casa + (enr ? 1 : 0) };
+}
+
+/* Peligro del rey: piezas rivales que presionan su zona + peones que faltan delante + posición */
+function peligroRey(b, color) {
+  const op = color === 'w' ? 'b' : 'w';
+  const er = estadoRey(b, color);
+  const k = colRC(er.sq);
+  const zona = [];
+  for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+    const r = k.r + dr, c = k.c + dc;
+    if (r >= 0 && r < 8 && c >= 0 && c < 8) zona.push([r, c]);
+  }
+  let att = 0;
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = b[r][c];
+    if (p && p.color === op && p.type !== 'k') {
+      if (zona.some(z => ataca(b, r, c, z[0], z[1]))) att++;
+    }
+  }
+  const falta = er.max - er.esc;
+  const pen = er.tipo === 'exp' ? 2 : er.tipo === 'cen' ? 1 : 0;
+  return { sq: er.sq, tipo: er.tipo, att: att, falta: falta, pen: pen, punt: att + falta + pen };
+}
+
+const CENTRO = [[3,3], [3,4], [4,3], [4,4]];   /* d5, e5, d4, e4 */
+function controlCentro(b, color) {
+  let t = 0;
+  CENTRO.forEach(z => {
+    t += atacantes(b, z[0], z[1], color).length;
+    const p = b[z[0]][z[1]];
+    if (p && p.color === color) t += (p.type === 'p' ? 2 : 1);
+  });
+  return t;
+}
+function peonesCentrales(b, color) {
+  const res = [];
+  for (let r = 0; r < 8; r++) for (let c = 3; c <= 4; c++) {
+    const p = b[r][c];
+    if (p && p.type === 'p' && p.color === color) res.push(sqName(r, c));
+  }
+  return res;
+}
+
+const ESPERADA = { n: 4, b: 5, r: 4 };   /* casillas que una pieza activa suele controlar */
+function movilidadPiezas(b, color) {
+  const res = [];
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = b[r][c];
+    if (!p || p.color !== color || !ESPERADA[p.type]) continue;
+    let mob = 0;
+    for (let tr = 0; tr < 8; tr++) for (let tc = 0; tc < 8; tc++) {
+      if (tr === r && tc === c) continue;
+      const t = b[tr][tc];
+      if ((!t || t.color !== color) && ataca(b, r, c, tr, tc)) mob++;
+    }
+    res.push({ type: p.type, sq: sqName(r, c), mob: mob, def: ESPERADA[p.type] - mob });
+  }
+  return res;
+}
+
+/* Roturas: empuje de peón que toca un peón rival y queda apoyado, o cambio de peones */
+function roturasDe(g, me) {
+  const op = me === 'w' ? 'b' : 'w', res = [];
+  const ms = g.moves({ verbose: true }).filter(m =>
+    m.piece === 'p' && !m.promotion && (!m.captured || m.captured === 'p'));
+  for (const m of ms) {
+    g.move({ from: m.from, to: m.to });
+    const b = g.board();
+    const rc = colRC(m.to);
+    const pAtt = atacantes(b, rc.r, rc.c, op).filter(a => a.type === 'p');
+    const apoyo = atacantes(b, rc.r, rc.c, me).length;
+    g.undo();
+    if (m.captured === 'p') res.push({ m: m, tipo: 'cambio', apoyo: apoyo, pAtt: pAtt });
+    else if (pAtt.length && apoyo >= 1) res.push({ m: m, tipo: 'rotura', apoyo: apoyo, pAtt: pAtt });
+  }
+  res.sort((a, b) => (a.tipo === b.tipo) ? 0 : (a.tipo === 'rotura' ? -1 : 1));
+  return res;
+}
+
+/* Compara dos magnitudes. d > 0 favorece a "yo". Acepta también el lado que se inclina si está en el límite */
+function juzgar(d, umbral, resp) {
+  const exp = d >= umbral ? 'yo' : d <= -umbral ? 'el' : 'par';
+  let ok = resp === exp;
+  if (!ok && exp === 'par' && d !== 0) ok = resp === (d > 0 ? 'yo' : 'el');
+  return { exp: exp, ok: ok };
+}
+function signo(n) { return n > 0 ? '+' + n : '' + n; }
 
 /* ============ TEXTOS AUXILIARES ============ */
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
@@ -626,7 +765,7 @@ function descAmen(a) {
     pz(u.type, u.sq) + (u.motivo === 'colgada' ? ' (sin defensa)' : ' (con una pieza menor)')).join(' y ');
 }
 const TIPO_REY = { enr: 'enrocado (o en la esquina)', cen: 'en el centro, sin enrocar', exp: 'fuera de su casa, expuesto' };
-const NOTA_ESTATICA = '<br><small>Cuenta cambios sobre esa casilla; no ve tácticas más profundas. Stockfish lo afinará en la Etapa 4.</small>';
+const NOTA_ESTATICA = '<br><small>Cuenta cambios sobre esa casilla; no ve tácticas más profundas. Para afinarlo usa Stockfish (niveles de ayuda 2 a 4).</small>';
 
 /* ============ CONTEXTO DE LA POSICIÓN ============ */
 function calcCtx() {
@@ -651,6 +790,10 @@ function calcCtx() {
   const jaques = legales.filter(esJaque);
   const caps = legales.filter(m => m.captured).map(m => ({ m: m, net: netoCap(gc, m) }));
   const amen = amenazasDe(gc, me);
+  const rot = roturasDe(gc, me);
+
+  const der = game.fen().split(' ')[2];
+  const derechoEnroque = me === 'w' ? /[KQ]/.test(der) : /[kq]/.test(der);
 
   return {
     estado: 'ok', me: me, op: op, b: b, ult: ult,
@@ -660,7 +803,15 @@ function calcCtx() {
     enJaque: game.in_check(),
     clavM: clavadas(b, me), clavS: clavadas(b, op),
     reyM: estadoRey(b, me), reyS: estadoRey(b, op),
-    legales: legales, jaques: jaques, caps: caps, amen: amen
+    legales: legales, jaques: jaques, caps: caps, amen: amen,
+    mat: { yo: materialDe(b, me), el: materialDe(b, op) },
+    dev: { yo: desarrolloDe(b, me), el: desarrolloDe(b, op) },
+    pel: { yo: peligroRey(b, me), el: peligroRey(b, op) },
+    cen: { yo: controlCentro(b, me), el: controlCentro(b, op) },
+    mob: movilidadPiezas(b, me),
+    rot: rot,
+    puedoEnrocar: legales.some(m => /^O-O/.test(m.san)),
+    derechoEnroque: derechoEnroque
   };
 }
 
@@ -700,7 +851,7 @@ function getTras() {
 
 /* ============ PREGUNTAS ============ */
 function construirPreguntas(x) {
-  const u = x.ult, P1 = [], P2 = [], P5 = [], P8 = [];
+  const u = x.ult, P1 = [], P2 = [], P3 = [], P4 = [], P5 = [], P8 = [];
   const SN = [['si', 'Sí'], ['no', 'No']];
 
   /* ---------- AZUL ---------- */
@@ -864,8 +1015,208 @@ function construirPreguntas(x) {
       let h = (m || e) ? '' : 'No hay clavadas contra ningún rey.';
       if (m) h += 'Mías:' + lista(x.clavM.map(f));
       if (e) h += 'Suyas:' + lista(x.clavS.map(f));
-      h += '<br><small>Horquillas y ataques descubiertos los vigilará Stockfish en la Etapa 4.</small>';
+      h += '<br><small>Horquillas y ataques descubiertos no los detecta este conteo: Stockfish ayuda a revisarlos.</small>';
       return { ok: s[0] === exp, html: h, res: x.clavM.concat(x.clavS).map(c => c.sq) };
+    }
+  });
+
+  /* ---------- NARANJA: MODO ---------- */
+  const opsLado = (a, b, c) => [['yo', a], ['par', b], ['el', c]];
+  const quien = (d, u, a, b, c) => d >= u ? a : d <= -u ? c : b;
+
+  P3.push({
+    id: '3a', corto: '¿Material?',
+    texto: 'Primero el termómetro: ¿cómo está el material?', tipo: 'radio',
+    ops: opsLado('Voy ganando material', 'Está igualado', 'Voy perdiendo material'),
+    ev: s => {
+      const d = x.mat.yo - x.mat.el;
+      const j = juzgar(d, 2, s[0]);
+      return {
+        ok: j.ok,
+        html: 'Material (peón 1, caballo y alfil 3, torre 5, dama 9): yo ' + x.mat.yo + ', él ' + x.mat.el + '. ' +
+              (d === 0 ? 'Igualado.' : d > 0 ? 'Voy ' + d + ' por delante.' : 'Voy ' + (-d) + ' por detrás.') +
+              '<br><small>Con diferencia de 1 punto se acepta «igualado» o el lado que va por delante.</small>',
+        res: []
+      };
+    }
+  });
+
+  P3.push({
+    id: '3b', corto: '¿Desarrollo?',
+    texto: '¿Quién tiene mejor desarrolladas sus piezas (caballos y alfiles fuera de casa, rey enrocado)?', tipo: 'radio',
+    ops: opsLado('Yo', 'Parejo', 'Él'),
+    ev: s => {
+      const d = x.dev.yo.punt - x.dev.el.punt;
+      const j = juzgar(d, 2, s[0]);
+      const f = t => t.casa + ' de 4 piezas menores sin mover, ' + (t.enr ? 'rey enrocado' : 'rey sin enrocar');
+      let h = 'Yo: ' + f(x.dev.yo) + '.<br>Él: ' + f(x.dev.el) + '.<br>';
+      h += quien(d, 2, 'Voy más adelantado: conviene abrir el juego antes de que él se ponga al día.',
+                       'Desarrollo parejo: gana quien use mejor sus piezas.',
+                       'Él va más adelantado: evita abrir el juego y termina de desarrollarte.');
+      return { ok: j.ok, html: h, res: [] };
+    }
+  });
+
+  P3.push({
+    id: '3c', corto: '¿Qué rey está más expuesto?',
+    texto: '¿Qué rey está más expuesto a un ataque?', tipo: 'radio',
+    ops: opsLado('El mío', 'Parecidos', 'El suyo'),
+    ev: s => {
+      const d = x.pel.yo.punt - x.pel.el.punt;
+      const j = juzgar(d, 2, s[0]);
+      const f = (t, q) => q + ' (' + t.sq + '): ' + TIPO_REY[t.tipo] + ' · piezas rivales que presionan su zona: ' + t.att +
+                          ' · peones que faltan delante: ' + t.falta;
+      let h = f(x.pel.yo, 'Mi rey') + '.<br>' + f(x.pel.el, 'Su rey') + '.<br>';
+      h += quien(-d, 2, 'El suyo está más expuesto: hay posibilidades de ataque.',
+                        'Reyes en situación parecida.',
+                        'El mío está más expuesto: cuidado con abrir líneas hacia él.');
+      return { ok: j.ok, html: h + '<br><small>Es una estimación por conteo.</small>', res: [x.pel.yo.sq, x.pel.el.sq] };
+    }
+  });
+
+  const NOMBRE_MODO = { ataco: 'atacar', contra: 'contraatacar / equilibrar', defiendo: 'defender' };
+  P3.push({
+    id: '3d', corto: 'Mi modo',
+    texto: 'Con todo lo anterior: ¿ataco, contraataco o defiendo?', tipo: 'radio',
+    ops: [['ataco', 'Atacar: tengo la iniciativa y busco ganar algo'],
+          ['contra', 'Contraatacar / equilibrar: no estoy peor y respondo con jugadas activas'],
+          ['defiendo', 'Defender: primero seguridad, él tiene la iniciativa']],
+    ev: s => {
+      const cl = (v, a, b) => Math.max(a, Math.min(b, v));
+      const pm = cl(x.mat.yo - x.mat.el, -3, 3);
+      const pd = cl(x.dev.yo.punt - x.dev.el.punt, -2, 2);
+      const pr = cl(x.pel.el.punt - x.pel.yo.punt, -2, 2);
+      const tot = pm + pd + pr;
+      const sug = x.enJaque ? 'defiendo' : tot >= 2 ? 'ataco' : tot <= -2 ? 'defiendo' : 'contra';
+      let h = 'Indicadores (a mi favor +, en mi contra −): material ' + signo(pm) + ', desarrollo ' + signo(pd) +
+              ', seguridad de reyes ' + signo(pr) + ' → total ' + signo(tot) + '.<br>' +
+              'Sugieren: <b>' + NOMBRE_MODO[sug] + '</b>.';
+      if (x.enJaque) h += ' (Estoy en jaque: lo primero es resolverlo.)';
+      h += '<br>' + (s[0] === sug ? 'Coincide con tu elección.'
+          : 'Tú elegiste <b>' + NOMBRE_MODO[s[0]] + '</b>: ¿qué ves tú que estos números no ven?');
+      h += '<br><small>Decisión tuya: no puntúa.</small>';
+      return { ok: null, tit: '🧭 Modo elegido.', html: h, res: [] };
+    }
+  });
+
+  /* ---------- VERDE: PRINCIPIOS ---------- */
+  if (x.mob.length) {
+    P4.push({
+      id: '4a', corto: '¿Cuál es mi peor pieza?',
+      texto: '¿Cuál es mi peor pieza (la más pasiva o encerrada)?', tipo: 'radio',
+      ops: x.mob.map(p => [p.sq, cap(pz(p.type, p.sq))]),
+      ev: s => {
+        const L = x.mob.slice().sort((a, b) => b.def - a.def);
+        const peor = L[0];
+        const el = x.mob.find(p => p.sq === s[0]);
+        const ok = !!el && el.def >= peor.def - 1;
+        const dest = x.legales.filter(m => m.from === peor.sq).map(m => nombreJug(m.san));
+        let h = 'Movilidad (casillas que controla, sin contar las ocupadas por mis piezas):' +
+                lista(L.map(p => cap(pz(p.type, p.sq)) + ': ' + p.mob + ' casillas'), 8);
+        h += 'Mi peor pieza: <b>' + pz(peor.type, peor.sq) + '</b>. ' +
+             (dest.length ? 'Puede ir ahora a: ' + dest.slice(0, 6).join(', ') + '.'
+                          : 'Ahora no tiene jugadas legales: hay que liberarla.');
+        if (peor.def <= 0) h += '<br>Todas están bastante activas; la «peor» es solo la relativamente menos activa.';
+        h += '<br><small>Se acepta también una pieza casi igual de pasiva.</small>';
+        return { ok: ok, html: h, res: [peor.sq] };
+      }
+    });
+  }
+
+  P4.push({
+    id: '4b', corto: '¿Quién controla el centro?',
+    texto: '¿Quién controla mejor el centro (d4, e4, d5, e5)?', tipo: 'radio',
+    ops: opsLado('Yo controlo más', 'Está parejo', 'Él controla más'),
+    ev: s => {
+      const d = x.cen.yo - x.cen.el;
+      const j = juzgar(d, 3, s[0]);
+      const mp = peonesCentrales(x.b, x.me), sp = peonesCentrales(x.b, x.op);
+      let h = 'Control del centro (peones que ocupan + piezas que atacan las 4 casillas): yo ' + x.cen.yo + ', él ' + x.cen.el + '.<br>' +
+              'Peones en las columnas d/e: míos: ' + (mp.length ? mp.join(', ') : 'ninguno') +
+              ' · suyos: ' + (sp.length ? sp.join(', ') : 'ninguno') + '.<br>';
+      h += quien(d, 3, 'Tengo la ventaja en el centro: conviene mantenerla.',
+                       'Centro parejo.',
+                       'Él domina el centro: busca romperlo o mejorar mis piezas antes de abrir.');
+      return { ok: j.ok, html: h, res: ['d5', 'e5', 'd4', 'e4'] };
+    }
+  });
+
+  P4.push({
+    id: '4c', corto: '¿Qué hago con mi rey?',
+    texto: '¿Qué toca con mi rey?', tipo: 'radio',
+    ops: [['enrocar', 'Enrocar ya (sigo en el centro y puedo hacerlo)'],
+          ['preparar', 'Preparar el enroque (todavía no puedo, pero conservo el derecho)'],
+          ['ok', 'Está a salvo: no debilitar su refugio de peones'],
+          ['riesgo', 'Está en peligro: ponerlo a salvo o reforzarlo es lo primero']],
+    ev: s => {
+      const r = x.pel.yo;
+      let exp, acept;
+      if (r.tipo === 'exp') exp = 'riesgo';
+      else if (r.tipo === 'cen') exp = x.puedoEnrocar ? 'enrocar' : (x.derechoEnroque ? 'preparar' : 'riesgo');
+      else exp = r.punt <= 2 ? 'ok' : 'riesgo';
+      acept = (r.tipo === 'enr' && r.punt === 3) ? ['ok', 'riesgo'] : [exp];
+      const TXT = {
+        enrocar: 'Lo habitual: enrocar pronto, antes de abrir el centro.',
+        preparar: 'Aún no puedes (hay piezas en medio o casillas atacadas), pero conservas el derecho: prepáralo.',
+        ok: 'El refugio está bien: evita mover los peones de delante sin necesidad.',
+        riesgo: 'Hay peligro: antes de planes o ataques, refuerza o evacúa al rey.'
+      };
+      let h = 'Mi rey (' + r.sq + ') está ' + TIPO_REY[r.tipo] + '. Piezas rivales que presionan su zona: ' + r.att +
+              ' · peones que faltan delante: ' + r.falta + '.<br>' +
+              'Puedo enrocar ahora: ' + (x.puedoEnrocar ? 'sí' : 'no') + ' · conservo el derecho: ' + (x.derechoEnroque ? 'sí' : 'no') + '.<br>' +
+              TXT[exp];
+      return { ok: acept.includes(s[0]), html: h, res: [r.sq] };
+    }
+  });
+
+  P4.push({
+    id: '4d', corto: '¿Tengo alguna rotura?',
+    texto: '¿Tengo disponible alguna rotura de peones (un empuje apoyado que toca un peón rival) o un cambio de peones?', tipo: 'radio', ops: SN,
+    ev: s => {
+      const hay = x.rot.length > 0;
+      const desc = r => '<b>' + nombreJug(r.m.san) + '</b>: ' + (r.tipo === 'cambio'
+        ? 'cambia peones'
+        : 'empuja el peón hasta tocar ' + r.pAtt.map(a => 'el peón de ' + a.sq).join(' y ') + ', apoyado por ' + r.apoyo + ' pieza(s)');
+      let h = hay ? 'Roturas y cambios de peones disponibles:' + lista(x.rot.map(desc), 6) +
+                    'Una rotura abre el juego donde estás mejor; no la juegues si debilita a tu rey.'
+                  : 'No veo roturas apoyadas ni cambios de peones ahora mismo.';
+      return { ok: (s[0] === 'si') === hay, html: h, res: x.rot.slice(0, 8).map(r => r.m.to) };
+    }
+  });
+
+  const PLAN = { rey: 'poner el rey a salvo', centro: 'luchar por el centro', pieza: 'mejorar mi peor pieza',
+                 rotura: 'preparar o ejecutar una rotura', otro: 'otro plan concreto' };
+  P4.push({
+    id: '4e', corto: 'Mi plan',
+    texto: 'Con lo visto: ¿cuál es mi plan en una frase?', tipo: 'radio',
+    ops: [['rey', 'Poner el rey a salvo (enrocar o reforzar)'],
+          ['centro', 'Luchar por el centro'],
+          ['pieza', 'Mejorar mi peor pieza'],
+          ['rotura', 'Preparar o ejecutar una rotura de peones'],
+          ['otro', 'Otro plan concreto (atacar una debilidad, cambiar piezas...)']],
+    ev: s => {
+      const r = x.pel.yo;
+      const peor = x.mob.slice().sort((a, b) => b.def - a.def)[0];
+      let sug, why;
+      if (r.tipo === 'exp' || (r.tipo === 'cen' && x.puedoEnrocar) || (r.tipo === 'enr' && r.punt >= 4)) {
+        sug = 'rey'; why = 'mi rey necesita atención';
+      } else if (x.cen.yo - x.cen.el <= -3) {
+        sug = 'centro'; why = 'él domina el centro';
+      } else if (peor && peor.def >= 3) {
+        sug = 'pieza'; why = pz(peor.type, peor.sq) + ' está muy pasiva';
+      } else if (x.rot.some(q => q.tipo === 'rotura')) {
+        sug = 'rotura'; why = 'tengo una rotura apoyada disponible';
+      } else if (peor) {
+        sug = 'pieza'; why = 'no hay urgencias: mejora la menos activa';
+      } else {
+        sug = 'centro'; why = 'no hay urgencias: refuerza el centro';
+      }
+      let h = 'Orden habitual de prioridades: 1) rey a salvo, 2) centro, 3) peor pieza, 4) rotura.<br>' +
+              'Mis indicadores sugieren: <b>' + PLAN[sug] + '</b> (' + why + ').<br>' +
+              (s[0] === sug ? 'Coincide con tu elección.'
+                            : 'Tú elegiste <b>' + PLAN[s[0]] + '</b>: asegúrate de poder explicar por qué es más urgente.');
+      h += '<br><small>Plan elegido por ti: no puntúa.</small>';
+      return { ok: null, tit: '🗺 Plan elegido.', html: h, res: [] };
     }
   });
 
@@ -1031,8 +1382,8 @@ function construirPreguntas(x) {
     ev: s => ({
       ok: null,
       html: 'Pregunta de reflexión: no se puede comprobar solo con conteo de piezas.' +
-            '<br>Si dices «no lo sé», dedica 10 segundos a imaginar qué haría tú en su lugar.' +
-            '<br><small>Stockfish (Etapa 4) la comprobará.</small>',
+            '<br>Si dices «no lo sé», dedica 10 segundos a imaginar qué haría él en su lugar.' +
+            '<br><small>Stockfish puede ayudarte a comprobarla (nivel de ayuda 3 o 4).</small>',
       res: []
     })
   });
@@ -1051,7 +1402,7 @@ function construirPreguntas(x) {
     }
   });
 
-  return { 1: P1, 2: P2, 5: P5, 8: P8 };
+  return { 1: P1, 2: P2, 3: P3, 4: P4, 5: P5, 8: P8 };
 }
 
 function qtxt(q) { return typeof q.texto === 'function' ? q.texto() : q.texto; }
@@ -1074,7 +1425,7 @@ function coachReset() {
   C.verif = {}; C.tmp = []; C.verPreg = false; C.q = 0;
   C.cand = []; C.eleg = []; C.elegida = null; C.tras = null;
   resaltes = {};
-  C.preg = { 1: [], 2: [], 5: [], 8: [] };
+  C.preg = { 1: [], 2: [], 3: [], 4: [], 5: [], 8: [] };
   C.paso = 1;
   if (C.ctx.estado === 'ok') {
     C.preg = construirPreguntas(C.ctx);
@@ -1232,7 +1583,7 @@ function renderCoach(hablarAhora) {
     let h = '<div class="info"><b>⏸ Ahora piensas tú, sin ayuda.</b><br>' +
       'Recorre con la mano estos pasos antes de decidir:' +
       '<table class="mapa" style="margin-top:6px"><tr><th></th><th>Paso</th><th>Gesto</th><th>Pregunta</th></tr>';
-    [3, 4, 6, 7].forEach(n => {
+    [6, 7].forEach(n => {
       const P = PASOS[n];
       h += '<tr><td style="background:' + colPaso(n) + ';width:14px"></td><td>' + P.cn + ' · ' + P.nom + '</td><td>' + P.gesto + '</td><td>' + P.ancla + '</td></tr>';
     });
@@ -1249,10 +1600,10 @@ function renderCoach(hablarAhora) {
       const v = C.verif[q.id]; if (!v) return;
       if (v.ok === true) ok++; else if (v.ok === false) mal++; else neu++;
     }));
-    let h = '<div class="info"><b>✔ Sistema completado: Azul, Rojo, Amarillo y Granate.</b><br>' +
+    let h = '<div class="info"><b>✔ Sistema completado: Azul, Rojo, Naranja, Verde, Amarillo y Granate.</b><br>' +
       'Aciertos: ' + ok + ' · A revisar: ' + mal + ' · Reflexión: ' + neu;
     if (C.elegida) h += '<br><br>Mi jugada: <b>' + nombreJug(C.elegida) + '</b>.';
-    h += '<br><small>Recuerda: estas comprobaciones son estáticas. Stockfish llega en la Etapa 4.</small></div><div class="botones">';
+    h += '<br><small>Recuerda: estas comprobaciones son estáticas (cuentan piezas y casillas). Stockfish las afina.</small></div><div class="botones">';
     if (C.elegida && ply === movs.length && game.turn() === miColor)
       h += '<button class="prim" onclick="jugarElegida()">▶ Jugar ' + nombreJug(C.elegida) + ' en el tablero</button>';
     h += '<button onclick="reiniciarCoach()">Repetir esta posición</button></div>';
@@ -1306,7 +1657,7 @@ function renderCoach(hablarAhora) {
   if (v) {
     const cls = v.ok === true ? 'ok' : v.ok === false ? 'mal' : 'neu';
     const tit = v.tit ? v.tit : (v.ok === true ? '✅ Correcto.' : v.ok === false ? '⚠️ Revisa:' : '💭 Reflexión (no puntúa).');
-        fb = '<div class="fb ' + cls + '"><b>' + tit + '</b><br>' + v.html + '</div>' +
+    fb = '<div class="fb ' + cls + '"><b>' + tit + '</b><br>' + v.html + '</div>' +
          (v.sf ? '<div class="fb neu">' + v.sf + '</div>' : '');
     let etiqueta = 'Siguiente →';
     if (C.q === L.length - 1) {
@@ -1406,33 +1757,8 @@ reconstruir();
 actualizar();
 </script>
 
-<style>
-  html, body { overflow-anchor: none; }  /* evita saltos automáticos de scroll */
-  @media (min-width: 800px) {
-    .col-tablero-fija {
-      position: sticky;
-      top: 0;
-      align-self: start;   /* no se centra ni se estira con la otra columna */
-    }
-    .col-panel-minimo {
-      min-height: 100vh;   /* el panel nunca queda más corto que la pantalla */
-    }
-  }
-</style>
 <script>
-(function () {
-  var t = document.getElementById('tablero');
-  if (!t) return;
-  var col = t.parentElement;
-  col.classList.add('col-tablero-fija');
-  var hermanos = col.parentElement ? col.parentElement.children : [];
-  for (var i = 0; i < hermanos.length; i++) {
-    if (hermanos[i] !== col) hermanos[i].classList.add('col-panel-minimo');
-  }
-})();
-</script>
-
-<script>
+/* ============ STOCKFISH: MOTOR Y HERRAMIENTAS DE ANÁLISIS ============ */
 (function () {
   var URL_SF = 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js';
   var worker = null, cargando = null, cola = Promise.resolve();
@@ -1466,7 +1792,7 @@ actualizar();
       var m = info.match(/ score (cp|mate) (-?\d+)/);
       if (m) {
         var v = +m[2];
-        if (turno === 'b') v = -v;           // siempre desde las blancas
+        if (turno === 'b') v = -v;           /* siempre desde las blancas */
         if (m[1] === 'cp') r.cp = v; else r.mate = v;
       }
       var p = info.split(' pv ')[1];
@@ -1513,24 +1839,11 @@ actualizar();
     return (r.cp > 0 ? '+' : '') + (r.cp / 100).toFixed(2) + ' (desde las blancas)';
   }
 
-  // ---------- panel ----------
-  var panel = document.createElement('div');
-  panel.style.cssText = 'margin-top:10px;padding:10px;border:2px solid #444;border-radius:8px;' +
-                        'font-size:14px;background:#fafafa;color:#111';
-  panel.innerHTML =
-    '<b>Stockfish (verificador)</b><br>' +
-    '<button id="sfA" style="font-size:15px;padding:5px 10px">Analizar esta posición</button> ' +
-    '<button id="sfT" style="font-size:15px;padding:5px 10px">Prueba de cordura</button><br>' +
-    '<label><input type="checkbox" id="sfM"> Mostrar la mejor jugada</label>' +
-    '<pre id="sfS" style="white-space:pre-wrap;margin:8px 0 0;font-size:13px;font-family:monospace">' +
-    'Listo. La primera vez tarda unos segundos en cargar el motor.</pre>';
-  var tab = document.getElementById('tablero');
-  (tab && tab.parentElement ? tab.parentElement : document.body).appendChild(panel);
-
-  var salida = panel.querySelector('#sfS');
+  /* ---------- herramientas (desplegable del panel) ---------- */
+  var salida = document.getElementById('sfS');
   function say(t) { salida.textContent = t; }
 
-  panel.querySelector('#sfA').onclick = function () {
+  document.getElementById('sfA').onclick = function () {
     var fen;
     try { fen = game.fen(); } catch (e) { say('No encuentro la partida (game).'); return; }
     if (game.game_over()) { say('La partida ya terminó.'); return; }
@@ -1538,7 +1851,7 @@ actualizar();
     analizar(fen, 3000).then(function (r) {
       var t = 'Turno: ' + (fen.split(' ')[1] === 'w' ? 'blancas' : 'negras') +
               '\nEvaluación: ' + evalTxt(r) + '   (profundidad ' + r.depth + ')';
-      if (panel.querySelector('#sfM').checked) {
+      if (document.getElementById('sfM').checked) {
         t += '\nMejor jugada: ' + lineaSan(fen, [r.best], 1).join('') +
              '\nLínea: ' + lineaSan(fen, r.pv, 6).join(' ');
       }
@@ -1554,7 +1867,7 @@ actualizar();
     { nom: 'Posición inicial (solo mirar el número)',
       fen: 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1', esp: null }
   ];
-  panel.querySelector('#sfT').onclick = function () {
+  document.getElementById('sfT').onclick = function () {
     var txt = 'Prueba de cordura…\n';
     say(txt + '(tarda unos 10 segundos)');
     var i = 0;
@@ -1568,40 +1881,31 @@ actualizar();
         sig();
       }).catch(function (e) { say(txt + '\nError: ' + e.message); });
     })();
-    };
+  };
+
   window.SF = { analizar: analizar, lineaSan: lineaSan, evalTxt: evalTxt };
 })();
 </script>
 
 <script>
+/* ============ STOCKFISH: NIVELES DE AYUDA (1 a 4) ============ */
 (function () {
   var KEY = 'coachAyudaSF';
-  var UMBRAL = 150;      // caída en centipeones que dispara la alarma (150 = 1,5 peones)
-  var TOPE = 600;        // las evaluaciones se recortan a ±6 peones para no alarmar por nada
-  var nivel = 1;
-  try { nivel = parseInt(localStorage.getItem(KEY) || '1', 10); } catch (e) {}
-  if (!(nivel >= 1 && nivel <= 4)) nivel = 1;
-  var token = 0, ocupado = false, ultimo = null;
+  var UMBRAL = 150;      /* caída en centipeones que dispara la alarma (150 = 1,5 peones) */
+  var TOPE = 600;        /* las evaluaciones se recortan a ±6 peones */
+  var nivelSF = 1;
+  try { nivelSF = parseInt(localStorage.getItem(KEY) || '1', 10); } catch (e) {}
+  if (!(nivelSF >= 1 && nivelSF <= 4)) nivelSF = 1;
+  var token = 0, ocupado = false, ultimo = null, cache = {};
 
-  // ---------- selector de nivel ----------
-  var base = document.getElementById('sfA');
-  var host = base ? base.parentElement : document.body;
-  var sel = document.createElement('div');
-  sel.style.cssText = 'margin:8px 0;padding:6px;border:1px solid #bbb;border-radius:6px;background:#fff';
-  sel.innerHTML = '<b>Nivel de ayuda:</b> <select id="sfNivel" style="font-size:14px">' +
-    '<option value="1">1 · Solo preguntas (sin Stockfish)</option>' +
-    '<option value="2">2 · Verificar mis respuestas (aún no: actúa como 1)</option>' +
-    '<option value="3">3 · Chequeo final antes de jugar</option>' +
-    '<option value="4">4 · Chequeo + revelar línea tras mover</option></select>';
-  host.insertBefore(sel, host.children[1] || null);
-  var s = sel.querySelector('#sfNivel');
-  s.value = String(nivel);
-  s.onchange = function () {
-    nivel = parseInt(s.value, 10);
-    try { localStorage.setItem(KEY, String(nivel)); } catch (e) {}
+  var selNivel = document.getElementById('sfNivel');
+  selNivel.value = String(nivelSF);
+  selNivel.onchange = function () {
+    nivelSF = parseInt(selNivel.value, 10);
+    try { localStorage.setItem(KEY, String(nivelSF)); } catch (e) {}
   };
 
-  // ---------- ventana emergente ----------
+  /* ---------- ventana emergente ---------- */
   var vel = document.createElement('div');
   vel.style.cssText = 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.55);' +
                       'display:none;align-items:center;justify-content:center;z-index:9999';
@@ -1627,21 +1931,21 @@ actualizar();
   }
   function cerrar() { vel.style.display = 'none'; }
 
-  // ---------- tarjeta del nivel 4 ----------
+  /* ---------- tarjeta del nivel 4 ---------- */
   var tarj = document.createElement('div');
   tarj.style.cssText = 'position:fixed;right:10px;bottom:10px;max-width:360px;background:#fff;color:#111;' +
     'border:2px solid #444;border-radius:8px;padding:10px 12px;font-size:14px;line-height:1.4;' +
     'z-index:9998;display:none;font-family:sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.35)';
   document.body.appendChild(tarj);
 
-  // ---------- evaluaciones desde MI lado ----------
-  function valor(r, color) {
+  /* ---------- evaluaciones desde MI lado ---------- */
+  function raw(r, color) {
     var v = 0;
     if (r.mate !== null) v = (r.mate > 0 ? 1 : -1) * 10000;
     else if (r.cp !== null) v = r.cp;
-    if (color === 'b') v = -v;
-    return Math.max(-TOPE, Math.min(TOPE, v));
+    return color === 'b' ? -v : v;
   }
+  function rec(v) { return Math.max(-TOPE, Math.min(TOPE, v)); }
   function texto(r, color) {
     var sg = (color === 'w') ? 1 : -1;
     if (r.mate !== null) {
@@ -1651,11 +1955,16 @@ actualizar();
     var v = r.cp * sg / 100;
     return (v > 0 ? '+' : '') + v.toFixed(2);
   }
+  function fmt(v) {
+    if (Math.abs(v) >= 10000) return v > 0 ? 'mate a tu favor' : 'mate en tu contra';
+    return (v > 0 ? '+' : '') + (v / 100).toFixed(2);
+  }
+  function nom(san) { return (typeof nombreJug === 'function') ? nombreJug(san) : san; }
 
-  // ---------- revisión antes de jugar (niveles 3 y 4) ----------
+  /* ---------- revisión antes de jugar (niveles 3 y 4) ---------- */
   function revisar(fen, elegida, cb) {
     ultimo = null;
-    if (nivel < 3 || !window.SF) { cb(true); return; }
+    if (nivelSF < 3 || !window.SF) { cb(true); return; }
     if (ocupado) return;
     var g = new Chess(fen), mv = g.move(elegida);
     if (!mv || g.game_over()) { cb(true); return; }
@@ -1666,7 +1975,7 @@ actualizar();
 
     function seguir() {
       cerrar();
-      if (game.fen() !== fen) return;        // la posición cambió mientras esperabas
+      if (game.fen() !== fen) return;        /* la posición cambió mientras esperabas */
       cb(true);
     }
 
@@ -1678,7 +1987,7 @@ actualizar();
       ocupado = false;
       var a = par[0], d = par[1];
       ultimo = { fen: fen, mv: mv, a: a, d: d, color: color };
-      var caida = valor(a, color) - valor(d, color);
+      var caida = rec(raw(a, color)) - rec(raw(d, color));
       if (caida >= UMBRAL) {
         mostrar('<b>⚠ Alarma de Stockfish</b><br>Con esa jugada tu evaluación baja de <b>' + texto(a, color) +
           '</b> a <b>' + texto(d, color) + '</b>.<br>Puede haber algo que no viste. ' +
@@ -1696,9 +2005,9 @@ actualizar();
     });
   }
 
-  // ---------- revelación después de mover (nivel 4) ----------
+  /* ---------- revelación después de mover (nivel 4) ---------- */
   function despues() {
-    if (nivel < 4 || !ultimo || !window.SF) return;
+    if (nivelSF < 4 || !ultimo || !window.SF) return;
     var u = ultimo; ultimo = null;
     var miUci = u.mv.from + u.mv.to + (u.mv.promotion || '');
     var miSan = SF.lineaSan(u.fen, [miUci], 1)[0] || u.mv.san;
@@ -1718,37 +2027,14 @@ actualizar();
     tarj.style.display = 'block';
   }
 
-  window.AyudaSF = { revisar: revisar, despues: despues, nivel: function () { return nivel; } };
-})();
-</script>
-
-<script>
-(function () {
-  if (!window.AyudaSF || !window.SF) return;
-  var TOPE = 600, cache = {};
-
-  var so = document.getElementById('sfNivel');
-  if (so && so.options[1]) so.options[1].text = '2 · Verificar mis candidatas (Amarillo)';
-
-  function raw(r, color) {
-    var v = 0;
-    if (r.mate !== null) v = (r.mate > 0 ? 1 : -1) * 10000;
-    else if (r.cp !== null) v = r.cp;
-    return color === 'b' ? -v : v;
-  }
-  function rec(v) { return Math.max(-TOPE, Math.min(TOPE, v)); }
-  function fmt(v) {
-    if (Math.abs(v) >= 10000) return v > 0 ? 'mate a tu favor' : 'mate en tu contra';
-    return (v > 0 ? '+' : '') + (v / 100).toFixed(2);
-  }
-  function nom(san) { return (typeof nombreJug === 'function') ? nombreJug(san) : san; }
+  /* ---------- verificación de candidatas (nivel 2 o más) ---------- */
   function analizarC(fen) {
     if (cache[fen]) return Promise.resolve(cache[fen]);
     return SF.analizar(fen, 2500).then(function (r) { cache[fen] = r; return r; });
   }
 
-  AyudaSF.candidatas = function (fen, lista, cb) {
-    if (AyudaSF.nivel() < 2) return '';
+  function candidatas(fen, lista, cb) {
+    if (nivelSF < 2 || !window.SF) return '';
     var color = fen.split(' ')[1];
     analizarC(fen).then(function (root) {
       var mejor = raw(root, color), out = [], i = 0;
@@ -1787,48 +2073,9 @@ actualizar();
       sig();
     }).catch(function (e) { cb('<b>Stockfish:</b> no pude consultar (' + ((e && e.message) || e) + ').'); });
     return '<b>Stockfish está revisando tus candidatas…</b> (unos segundos)';
-  };
-})();
-</script>
+  }
 
-<script>
-(function () {
-  var comprobarOrig = window.comprobar;
-  var renderOrig = window.renderCoach;
-  if (typeof comprobarOrig !== 'function' || typeof renderOrig !== 'function') return;
-
-  window.comprobar = function () {
-    var q = null;
-    try { q = C.preg[C.paso][C.q]; } catch (e) {}
-    var yaEstaba = q && C.verif[q.id];
-    comprobarOrig();
-    if (!q || q.id !== '5d' || yaEstaba) return;
-    var r = C.verif['5d'];
-    if (!r || r.sf || !window.AyudaSF || !AyudaSF.candidatas) return;
-    var fen = game.fen();
-    r.sf = AyudaSF.candidatas(fen, r.sel.slice(), function (html) {
-      r.sf = html;
-      if (game.fen() === fen && C.verif['5d'] === r) renderCoach(false);
-    }) || '';
-    renderCoach(false);
-  };
-
-  window.renderCoach = function (h) {
-    renderOrig(h);
-    try {
-      var r = C.verif['5d'];
-      if (C.paso === 5 && r && r.sf && C.preg[5][C.q] && C.preg[5][C.q].id === '5d') {
-        var bs = document.querySelectorAll('#coachBody .botones');
-        var ult = bs[bs.length - 1];
-        if (ult) {
-          var d = document.createElement('div');
-          d.className = 'fb neu';
-          d.innerHTML = r.sf;
-          ult.parentNode.insertBefore(d, ult);
-        }
-      }
-    } catch (e) {}
-  };
+  window.AyudaSF = { revisar: revisar, despues: despues, candidatas: candidatas, nivel: function () { return nivelSF; } };
 })();
 </script>
 
