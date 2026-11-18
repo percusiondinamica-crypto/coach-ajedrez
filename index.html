@@ -1714,5 +1714,74 @@ actualizar();
 })();
 </script>
 
+<script>
+(function () {
+  if (!window.AyudaSF || !window.SF) return;
+  var TOPE = 600, cache = {};
+
+  var so = document.getElementById('sfNivel');
+  if (so && so.options[1]) so.options[1].text = '2 · Verificar mis candidatas (Amarillo)';
+
+  function raw(r, color) {
+    var v = 0;
+    if (r.mate !== null) v = (r.mate > 0 ? 1 : -1) * 10000;
+    else if (r.cp !== null) v = r.cp;
+    return color === 'b' ? -v : v;
+  }
+  function rec(v) { return Math.max(-TOPE, Math.min(TOPE, v)); }
+  function fmt(v) {
+    if (Math.abs(v) >= 10000) return v > 0 ? 'mate a tu favor' : 'mate en tu contra';
+    return (v > 0 ? '+' : '') + (v / 100).toFixed(2);
+  }
+  function nom(san) { return (typeof nombreJug === 'function') ? nombreJug(san) : san; }
+  function analizarC(fen) {
+    if (cache[fen]) return Promise.resolve(cache[fen]);
+    return SF.analizar(fen, 2500).then(function (r) { cache[fen] = r; return r; });
+  }
+
+  AyudaSF.candidatas = function (fen, lista, cb) {
+    if (AyudaSF.nivel() < 2) return '';
+    var color = fen.split(' ')[1];
+    analizarC(fen).then(function (root) {
+      var mejor = raw(root, color), out = [], i = 0;
+      function sig() {
+        if (i >= lista.length) return fin();
+        var san = lista[i++];
+        var g = new Chess(fen), mv = g.move(san);
+        if (!mv) { out.push({ san: san, v: null }); return sig(); }
+        if (g.in_checkmate()) { out.push({ san: san, v: 10000 }); return sig(); }
+        if (g.game_over()) { out.push({ san: san, v: 0 }); return sig(); }
+        analizarC(g.fen()).then(function (d) {
+          out.push({ san: san, v: raw(d, color) });
+          sig();
+        }).catch(function (e) { cb('<b>Stockfish:</b> no pude terminar (' + ((e && e.message) || e) + ').'); });
+      }
+      function fin() {
+        var minD = 99999, h = '<b>Stockfish revisa tus candidatas</b> (referencia: ' + fmt(mejor) + ')<ul>';
+        var malas = [];
+        out.forEach(function (o) {
+          if (o.v === null) return;
+          var d = Math.max(0, rec(mejor) - rec(o.v));
+          if (d < minD) minD = d;
+          var et = d <= 25 ? 'a la altura de lo mejor' : d <= 75 ? 'muy cerca' :
+                   d < 150 ? 'algo peor' : 'claramente peor';
+          if (d >= 150) malas.push(nom(o.san));
+          h += '<li><b>' + nom(o.san) + '</b>: ' + fmt(o.v) + ' · ' + et + '</li>';
+        });
+        h += '</ul>';
+        if (minD <= 50) h += 'Al menos una candidata está a la altura de lo mejor que ve el motor. Buen filtro.';
+        else if (minD < 150) h += 'Tus candidatas son jugables, pero el motor ve algo mejor. ¿Te falta una idea? Revisa jaques, capturas y amenazas.';
+        else h += '⚠ Ninguna llega a la altura de lo mejor. Probablemente te falta una idea importante: vuelve a mirar jaques, capturas y amenazas del rival y tuyas.';
+        if (malas.length) h += '<br>Ojo con ' + malas.join(', ') + ': pierden claramente. ¿Qué se te escapó?';
+        h += '<br><small>No te digo cuál es la mejor. Profundidad modesta: orientativo.</small>';
+        cb(h);
+      }
+      sig();
+    }).catch(function (e) { cb('<b>Stockfish:</b> no pude consultar (' + ((e && e.message) || e) + ').'); });
+    return '<b>Stockfish está revisando tus candidatas…</b> (unos segundos)';
+  };
+})();
+</script>
+
 </body>
 </html>
