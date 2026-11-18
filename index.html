@@ -1101,6 +1101,13 @@ function comprobar() {
   r.sel = s;
   C.verif[q.id] = r;
   if (r.ok !== null && ply === movs.length) sumar(C.paso, r.ok);
+  if (q.id === '5d' && window.AyudaSF && AyudaSF.candidatas) {
+    const fen = game.fen();
+    r.sf = AyudaSF.candidatas(fen, s.slice(), function (html) {
+      r.sf = html;
+      if (game.fen() === fen && C.verif['5d'] === r) renderCoach(false);
+    });
+  }
   renderCoach(false);
 }
 
@@ -1299,7 +1306,8 @@ function renderCoach(hablarAhora) {
   if (v) {
     const cls = v.ok === true ? 'ok' : v.ok === false ? 'mal' : 'neu';
     const tit = v.tit ? v.tit : (v.ok === true ? '✅ Correcto.' : v.ok === false ? '⚠️ Revisa:' : '💭 Reflexión (no puntúa).');
-    fb = '<div class="fb ' + cls + '"><b>' + tit + '</b><br>' + v.html + '</div>';
+        fb = '<div class="fb ' + cls + '"><b>' + tit + '</b><br>' + v.html + '</div>' +
+         (v.sf ? '<div class="fb neu">' + v.sf + '</div>' : '');
     let etiqueta = 'Siguiente →';
     if (C.q === L.length - 1) {
       const nx = sigPaso(C.paso);
