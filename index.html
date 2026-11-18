@@ -163,8 +163,8 @@
       <h2>♞ Stockfish: nivel de ayuda</h2>
       <select id="sfNivel">
         <option value="1">1 · Solo preguntas (sin Stockfish)</option>
-        <option value="2">2 · Verificar mis candidatas (Amarillo)</option>
-        <option value="3">3 · Chequeo final antes de jugar</option>
+        <option value="2">2 · Verificar candidatas, línea y evaluación</option>
+        <option value="3">3 · Lo anterior + chequeo final antes de jugar</option>
         <option value="4">4 · Chequeo + revelar línea tras mover</option>
       </select>
       <details style="margin-top:8px">
@@ -230,10 +230,10 @@ const PASOS = [
   {n:4, nom:'Principios', col:'#2e9e4f', cn:'Verde',    gesto:'Pulgar + yema del meñique',    clave:'Plan',            ancla:'¿Peor pieza? ¿Centro? ¿Rey?'},
   {n:5, nom:'Candidatas', col:'#f2c400', cn:'Amarillo', gesto:'Pulgar + falange del índice',  clave:'J-C-A',           ancla:'Jaques, capturas, amenazas'},
   {n:6, nom:'Calcular',   col:'#7b3fc4', cn:'Violeta',  gesto:'Pulgar + falange del medio',   clave:'Línea',           ancla:'Una línea completa, su mejor respuesta'},
-  {n:7, nom:'Evaluar',    col:'#18a6a6', cn:'Turquesa', gesto:'Pulgar + falange del anular',  clave:'M.R.A.E.I.',      ancla:'¿Quién está mejor?'},
+  {n:7, nom:'Evaluar',    col:'#18a6a6', cn:'Turquesa', gesto:'Pulgar + falange del anular',  clave:'M.A.I.E.R.',      ancla:'Material · Actividad · Iniciativa · Estructura · Rey: ¿quién está mejor?'},
   {n:8, nom:'Chequeo',    col:'#7a1f33', cn:'Granate',  gesto:'Pulgar + falange del meñique', clave:'Ojo',             ancla:'¿Qué puede hacer él? ¿Dejo algo?'}
 ];
-const ORDEN = [1, 2, 3, 4, 5, 8];
+const ORDEN = [1, 2, 3, 4, 5, 6, 7, 8];
 const VAL = {p:1, n:3, b:3, r:5, q:9, k:100};
 const NOM = {p:'peón', n:'caballo', b:'alfil', r:'torre', q:'dama', k:'rey'};
 const ART = {p:'el', n:'el', b:'el', r:'la', q:'la', k:'el'};
@@ -252,12 +252,14 @@ let orient = 'w';
 let sel = null;
 let ultima = null;
 let resaltes = {};
+let vista = null;      /* si no es null: {g, ult} = posición de la línea calculada que se muestra en el tablero */
 
 /* ============ ESTADO DEL COACH ============ */
 let miColor = 'w';
 let nivel = 1;
-let C = { key: null, ctx: null, preg: {1:[],2:[],3:[],4:[],5:[],8:[]}, paso: 1, q: 0, verif: {}, tmp: [],
-          verPreg: false, cand: [], eleg: [], elegida: null, tras: null };
+let C = { key: null, ctx: null, preg: {1:[],2:[],3:[],4:[],5:[],6:[],7:[],8:[]}, paso: 1, q: 0, verif: {}, tmp: [],
+          verPreg: false, cand: [], eleg: [], elegida: null, tras: null,
+          c6: [], calcCand: null, linea: [], ind: null, vistaOff: false };
 
 /* ============ NOTACIÓN ============ */
 function aEs(san) {
@@ -300,7 +302,10 @@ function nueva() {
 function dibujarTablero() {
   const t = $('tablero');
   t.innerHTML = '';
-  const legales = sel ? game.moves({ square: sel, verbose: true }).map(m => m.to) : [];
+  const V = vista ? vista.g : null;
+  const G = V || game;
+  const ult = V ? vista.ult : ultima;
+  const legales = (!V && sel) ? game.moves({ square: sel, verbose: true }).map(m => m.to) : [];
   const files = 'abcdefgh';
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
@@ -309,9 +314,9 @@ function dibujarTablero() {
       const sq = files[fi] + ra;
       const d = document.createElement('div');
       let cls = 'sq ' + ((fi + ra) % 2 === 0 ? 'oscuro' : 'claro');
-      if (sq === sel) cls += ' sel';
-      if (ultima && (sq === ultima.from || sq === ultima.to)) cls += ' ultima';
-      const p = game.get(sq);
+      if (!V && sq === sel) cls += ' sel';
+      if (ult && (sq === ult.from || sq === ult.to)) cls += ' ultima';
+      const p = G.get(sq);
       if (legales.includes(sq)) cls += ' legal' + (p ? ' ocupada' : '');
       d.className = cls;
       d.dataset.sq = sq;
@@ -331,6 +336,7 @@ function dibujarTablero() {
 }
 
 function clicCasilla(sq) {
+  if (vista) return;   /* mientras se muestra la línea calculada, el tablero es solo de lectura */
   if (sel) {
     const ok = game.moves({ square: sel, verbose: true }).some(m => m.to === sq);
     if (ok) { mover(sel, sq); return; }
@@ -743,6 +749,111 @@ function juzgar(d, umbral, resp) {
 }
 function signo(n) { return n > 0 ? '+' + n : '' + n; }
 
+/* ============ EVALUACIÓN M.A.I.E.R. (Turquesa) ============ */
+/* Actividad: casillas controladas por caballos, alfiles, torres y damas (sin contar casillas ocupadas por piezas propias) */
+function actividadDe(b, color) {
+  let tot = 0, peor = null;
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = b[r][c];
+    if (!p || p.color !== color || 'nbrq'.indexOf(p.type) < 0) continue;
+    let mob = 0;
+    for (let tr = 0; tr < 8; tr++) for (let tc = 0; tc < 8; tc++) {
+      if (tr === r && tc === c) continue;
+      const t = b[tr][tc];
+      if ((!t || t.color !== color) && ataca(b, r, c, tr, tc)) mob++;
+    }
+    tot += mob;
+    if (p.type !== 'q' && (!peor || mob < peor.mob)) peor = { type: p.type, sq: sqName(r, c), mob: mob };
+  }
+  return { tot: tot, peor: peor };
+}
+
+/* Iniciativa: recursos forzantes que tendría 'color' si le tocara mover (jaques, capturas que ganan, amenazas) */
+function recursosDe(g, color) {
+  let gg;
+  if (g.turn() === color) gg = new Chess(g.fen());
+  else {
+    if (g.in_check()) return { jaq: 1, caps: 0, amen: 0, tot: 3, enJaque: true };
+    const f = g.fen().split(' ');
+    f[1] = color; f[3] = '-';
+    gg = new Chess();
+    if (!gg.load(f.join(' '))) return { jaq: 0, caps: 0, amen: 0, tot: 0 };
+  }
+  const ms = gg.moves({ verbose: true });
+  const jaq = ms.filter(esJaque).length;
+  const caps = ms.filter(m => m.captured).filter(m => netoCap(gg, m) > 0).length;
+  const amen = amenazasDe(gg, color).length;
+  return { jaq: jaq, caps: caps, amen: amen, tot: caps * 2 + amen + Math.min(jaq, 2) };
+}
+
+/* Estructura: peones doblados, aislados y pasados */
+function estructuraPeones(b, color) {
+  const mis = [[],[],[],[],[],[],[],[]], su = [[],[],[],[],[],[],[],[]];
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = b[r][c];
+    if (p && p.type === 'p') (p.color === color ? mis : su)[c].push(r);
+  }
+  let dob = 0, ais = 0;
+  const pas = [], dobC = [], aisC = [];
+  for (let c = 0; c < 8; c++) {
+    const n = mis[c].length;
+    if (n > 1) { dob += n - 1; dobC.push('abcdefgh'[c]); }
+    if (n > 0) {
+      const vec = (c > 0 ? mis[c - 1].length : 0) + (c < 7 ? mis[c + 1].length : 0);
+      if (!vec) { ais += n; aisC.push('abcdefgh'[c]); }
+    }
+    mis[c].forEach(r => {
+      let libreP = true;
+      for (let cc = Math.max(0, c - 1); cc <= Math.min(7, c + 1); cc++) {
+        su[cc].forEach(rr => { if (color === 'w' ? rr < r : rr > r) libreP = false; });
+      }
+      if (libreP) pas.push(sqName(r, c));
+    });
+  }
+  return { dob: dob, ais: ais, pas: pas, dobC: dobC, aisC: aisC, punt: pas.length - dob - ais };
+}
+
+/* Posición al final de la línea calculada (o la actual si no hay línea) */
+function posLinea(lista) {
+  const g = new Chess(game.fen());
+  let ult = null;
+  for (const san of lista) { const m = g.move(san); if (!m) break; ult = m; }
+  return { g: g, ult: ult };
+}
+function posEval() {
+  return C.linea.length ? posLinea(C.linea).g : new Chess(game.fen());
+}
+function lineaTxt(L) {
+  return L.map((m, i) => (i % 2 === 0 ? 'yo ' : 'rival ') + nombreJug(m)).join(' → ');
+}
+function capsLinea(L) {
+  const g = new Chess(game.fen()), out = [];
+  L.forEach((san, i) => {
+    const m = g.move(san);
+    if (!m) return;
+    if (m.captured) out.push((i % 2 === 0 ? 'Yo' : 'Rival') + ': <b>' + nombreJug(san) + '</b> captura ' + pz(m.captured));
+  });
+  return out;
+}
+function calcInd() {
+  const x = C.ctx, g = posEval();
+  if (g.game_over()) return { fin: true, g: g };
+  const b = g.board(), me = x.me, op = x.op;
+  return {
+    fin: false, g: g,
+    mat: { yo: materialDe(b, me), el: materialDe(b, op) },
+    act: { yo: actividadDe(b, me), el: actividadDe(b, op) },
+    ini: { yo: recursosDe(g, me), el: recursosDe(g, op) },
+    est: { yo: estructuraPeones(b, me), el: estructuraPeones(b, op) },
+    rey: { yo: peligroRey(b, me), el: peligroRey(b, op) }
+  };
+}
+function getInd() {
+  const key = game.fen() + '|' + C.linea.join(' ');
+  if (!C.ind || C.ind.key !== key) C.ind = { key: key, v: calcInd() };
+  return C.ind.v;
+}
+
 /* ============ TEXTOS AUXILIARES ============ */
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 function pz(t, sq) { return ART[t] + ' ' + NOM[t] + (sq ? ' de ' + sq : ''); }
@@ -851,7 +962,7 @@ function getTras() {
 
 /* ============ PREGUNTAS ============ */
 function construirPreguntas(x) {
-  const u = x.ult, P1 = [], P2 = [], P3 = [], P4 = [], P5 = [], P8 = [];
+  const u = x.ult, P1 = [], P2 = [], P3 = [], P4 = [], P5 = [], P6 = [], P7 = [], P8 = [];
   const SN = [['si', 'Sí'], ['no', 'No']];
 
   /* ---------- AZUL ---------- */
@@ -1293,8 +1404,240 @@ function construirPreguntas(x) {
       if (hayForzDisp && !candForz) h += '⚠️ Había jugadas forzadas disponibles y no incluiste ninguna. Revisa jaques, capturas y amenazas.<br>';
       const olv = x.caps.filter(c => c.net > 0 && !s.includes(c.m.san));
       if (olv.length) h += '⚠️ Capturas que ganan material y no incluiste: ' + olv.map(c => '<b>' + nombreJug(c.m.san) + '</b>').join(', ') + '.<br>';
-      if (ok && !olv.length) h += 'Buen filtro. Ahora calcúlalas tú (Violeta) y evalúalas (Turquesa).';
+      if (ok && !olv.length) h += 'Buen filtro. Ahora elige una y calcúlala (Violeta); después la evaluarás (Turquesa).';
       return { ok: ok, html: h, res: info.filter(i => i.m).map(i => i.m.to) };
+    }
+  });
+
+  /* ---------- VIOLETA: CALCULAR ---------- */
+  P6.push({
+    id: '6a', corto: '¿Qué candidata calculo?',
+    texto: () => C.cand.length
+      ? 'Calculo una candidata a fondo. ¿Cuál elijo? (toca una de tus candidatas o escribe otra)'
+      : 'No anoté candidatas en Amarillo. Escribe la jugada que quiero calcular.',
+    tipo: 'moves', store: 'c6', max: 1, quick: true,
+    ev: s => {
+      C.calcCand = s[0]; C.linea = []; C.ind = null;
+      const m = x.legales.find(l => l.san === s[0]);
+      const tags = [];
+      if (m && esJaque(m)) tags.push('jaque');
+      if (m && m.captured) tags.push('captura');
+      if (x.amen.some(a => a.m.san === s[0])) tags.push('amenaza');
+      const enC = C.cand.includes(s[0]);
+      let h = 'Voy a calcular <b>' + nombreJug(s[0]) + '</b>: ' +
+              (tags.length ? 'es forzante (' + tags.join(' + ') + '), buena para empezar.'
+                           : 'es una jugada tranquila; calcúlala igual, pero recuerda mirar antes lo forzado.');
+      if (C.cand.length && !enC) h += '<br>Ojo: no estaba entre mis candidatas.';
+      return { ok: null, tit: '🎯 Candidata a calcular.', html: h, res: m ? [m.from, m.to] : [] };
+    }
+  });
+
+  P6.push({
+    id: '6b', corto: 'Mi línea',
+    texto: () => 'Calculo la línea: ' + nombreJug(C.calcCand || '...') + ', la mejor respuesta del rival, mi siguiente jugada… ' +
+                 'Escríbelas en orden (de 3 a 5 medias jugadas). El tablero muestra cómo va quedando.',
+    tipo: 'moves', store: 'linea', max: 5,
+    minimo: s => s.length >= 3 || posLinea(s).g.game_over(),
+    minMsg: 'Escribe al menos 3 medias jugadas (la mía, la del rival y la mía otra vez), salvo que la línea termine la partida.',
+    ev: s => {
+      const P = posLinea(s), g = P.g;
+      const t = calcTras(s[0]);
+      let ok = true;
+      let h = 'Mi línea: ' + lineaTxt(s) + '.<br>';
+      if (t && s.length >= 2 && !t.fin) {
+        const mates = t.jaques.filter(m => /#/.test(m.san)).map(m => m.san);
+        const gana = t.caps.filter(c => c.net > 0).map(c => c.m.san);
+        const jaq = t.jaques.map(m => m.san);
+        const resp = s[1];
+        if (mates.length && !mates.includes(resp)) {
+          ok = false;
+          h += '⚠️ Al rival le daba <b>mate en 1</b> (' + mates.map(nombreJug).join(', ') + ') y la línea no lo juega: su respuesta no puede ignorar eso.<br>';
+        } else if (gana.length && !gana.includes(resp) && !jaq.includes(resp)) {
+          ok = false;
+          h += '⚠️ El rival tenía capturas que ganan material (' + gana.slice(0, 4).map(nombreJug).join(', ') +
+               ') y tu línea no las juega ni da jaque. «Su mejor respuesta» debe ser la que más me molesta.<br>';
+        } else {
+          h += 'La respuesta del rival es razonable: no ignora mates ni capturas que ganan material.<br>';
+        }
+      } else if (t && t.fin) {
+        h += 'Mi primera jugada ya termina la partida.<br>';
+      }
+      if (g.in_checkmate()) h += '🏁 La línea termina en <b>jaque mate</b>.<br>';
+      else if (g.game_over()) h += 'La línea termina en tablas.<br>';
+      h += NOTA_ESTATICA;
+      return { ok: ok, html: h, res: P.ult ? [P.ult.from, P.ult.to] : [] };
+    }
+  });
+
+  const sinLinea = () => ({ ok: null, html: 'Primero escribe tu línea (pregunta 6b).', res: [] });
+
+  P6.push({
+    id: '6c', corto: '¿Qué cambió?',
+    texto: 'Al final de mi línea, ¿qué pasó con el material respecto a la posición actual?', tipo: 'radio',
+    ops: [['gano', 'Gano material'], ['igual', 'El material queda igual'], ['pierdo', 'Pierdo material']],
+    ev: s => {
+      if (!C.linea.length) return sinLinea();
+      const g = posLinea(C.linea).g, b = g.board();
+      const d0 = x.mat.yo - x.mat.el;
+      const d1 = materialDe(b, x.me) - materialDe(b, x.op);
+      const dd = d1 - d0;
+      const exp = dd > 0 ? 'gano' : dd < 0 ? 'pierdo' : 'igual';
+      const caps = capsLinea(C.linea);
+      let h = 'Diferencia de material (yo − él): al inicio ' + signo(d0) + ', al final ' + signo(d1) + ' → ' +
+              (dd === 0 ? 'no cambia' : dd > 0 ? 'gano ' + dd : 'pierdo ' + (-dd)) + '.';
+      h += caps.length ? '<br>Capturas en la línea:' + lista(caps) : '<br>No hay capturas en la línea.';
+      const mi = insegurasDe(b, x.me), su = insegurasDe(b, x.op);
+      if (mi.length) h += 'Al final, mis piezas en riesgo:' + lista(mi.map(descU), 5);
+      if (su.length) h += 'Al final, sus piezas en riesgo:' + lista(su.map(descU), 5);
+      return { ok: s[0] === exp, html: h, res: [] };
+    }
+  });
+
+  P6.push({
+    id: '6d', corto: '¿Posición tranquila?',
+    texto: 'La posición final, ¿está tranquila? (¿ya no hay capturas que ganen material, mates en 1 ni jaque pendiente para quien mueve?)', tipo: 'radio',
+    ops: [['si', 'Sí, está tranquila: ya puedo evaluarla'],
+          ['no', 'No: quedan capturas o jaques pendientes, hay que seguir calculando']],
+    ev: s => {
+      if (!C.linea.length) return sinLinea();
+      const g = posLinea(C.linea).g;
+      if (g.game_over()) {
+        return { ok: null, html: g.in_checkmate() ? '🏁 La línea termina en jaque mate: no hay nada más que calcular.'
+                                                  : 'La línea termina en tablas: no hay nada más que calcular.', res: [] };
+      }
+      const mueve = g.turn() === x.me ? 'yo' : 'el rival';
+      const ms = g.moves({ verbose: true });
+      const caps = ms.filter(m => m.captured).map(m => ({ m: m, net: netoCap(g, m) })).filter(c => c.net > 0);
+      const mates = ms.filter(m => /#/.test(m.san));
+      const jaque = g.in_check();
+      const njaq = ms.filter(esJaque).length;
+      const pend = caps.length > 0 || mates.length > 0 || jaque;
+      let h = 'En la posición final mueve ' + mueve + '.<ul>' +
+        '<li>Capturas que ganan material: ' + (caps.length ? caps.slice(0, 5).map(c => nombreJug(c.m.san) + ' (' + txtNet(c.net) + ')').join(', ') : 'ninguna') + '</li>' +
+        '<li>Mates en 1: ' + (mates.length ? mates.map(m => nombreJug(m.san)).join(', ') : 'ninguno') + '</li>' +
+        '<li>En jaque ahora: ' + (jaque ? 'sí' : 'no') + ' · jaques disponibles: ' + njaq + '</li></ul>';
+      if (pend) h += 'Todavía no está tranquila: hay que seguir la línea antes de evaluar.' +
+        '<br><button onclick="rehacerLinea()">↺ Rehacer el cálculo (nueva línea)</button>';
+      else h += 'Está tranquila: evaluar ahora es fiable.' + (njaq ? ' (Si los jaques disponibles te inquietan, revísalos.)' : '');
+      h += NOTA_ESTATICA;
+      return { ok: (s[0] === 'si') === !pend, html: h, res: [] };
+    }
+  });
+
+  /* ---------- TURQUESA: EVALUAR (M · A · I · E · R) ---------- */
+  const finL = () => ({ ok: null, html: 'La línea termina la partida: no hay nada que evaluar.', res: [] });
+
+  P7.push({
+    id: '7a', corto: 'M · Material',
+    texto: 'M · Material: ¿quién va mejor de material?', tipo: 'radio',
+    ops: opsLado('Voy mejor yo', 'Igualado', 'Va mejor él'),
+    ev: s => {
+      const I = getInd(); if (I.fin) return finL();
+      const d = I.mat.yo - I.mat.el;
+      const j = juzgar(d, 2, s[0]);
+      const b = I.g.board();
+      const alf = c => { let n = 0; b.forEach(f => f.forEach(p => { if (p && p.type === 'b' && p.color === c) n++; })); return n; };
+      let h = 'Material (peón 1, caballo y alfil 3, torre 5, dama 9): yo ' + I.mat.yo + ', él ' + I.mat.el + ' (diferencia ' + signo(d) + ').';
+      if (alf(x.me) >= 2 && alf(x.op) < 2) h += '<br>Tengo la pareja de alfiles.';
+      if (alf(x.op) >= 2 && alf(x.me) < 2) h += '<br>Él tiene la pareja de alfiles.';
+      h += '<br><small>Con diferencia de 1 punto se acepta «igualado» o el lado que va por delante.</small>';
+      return { ok: j.ok, html: h, res: [] };
+    }
+  });
+
+  P7.push({
+    id: '7b', corto: 'A · Actividad',
+    texto: 'A · Actividad: ¿quién tiene las piezas más activas (controlan más casillas)?', tipo: 'radio',
+    ops: opsLado('Yo', 'Parejo', 'Él'),
+    ev: s => {
+      const I = getInd(); if (I.fin) return finL();
+      const d = I.act.yo.tot - I.act.el.tot;
+      const j = juzgar(d, 5, s[0]);
+      let h = 'Casillas que controlan caballos, alfiles, torres y damas (sin contar casillas con piezas propias): yo ' +
+              I.act.yo.tot + ', él ' + I.act.el.tot + ' (diferencia ' + signo(d) + ').';
+      if (I.act.yo.peor) h += '<br>Mi pieza menos activa: <b>' + pz(I.act.yo.peor.type, I.act.yo.peor.sq) + '</b> (' + I.act.yo.peor.mob + ' casillas).';
+      if (I.act.el.peor) h += '<br>Su pieza menos activa: <b>' + pz(I.act.el.peor.type, I.act.el.peor.sq) + '</b> (' + I.act.el.peor.mob + ' casillas).';
+      h += '<br>' + quien(d, 5, 'Mis piezas están mejor colocadas.', 'Actividad parecida.', 'Sus piezas están mejor colocadas.');
+      return { ok: j.ok, html: h, res: [] };
+    }
+  });
+
+  P7.push({
+    id: '7c', corto: 'I · Iniciativa',
+    texto: 'I · Iniciativa: ¿quién tiene la iniciativa (el que amenaza, da jaques y obliga al otro a responder)?', tipo: 'radio',
+    ops: opsLado('Yo', 'Nadie claramente', 'Él'),
+    ev: s => {
+      const I = getInd(); if (I.fin) return finL();
+      const a = I.ini.yo, e = I.ini.el;
+      const d = a.tot - e.tot;
+      const j = juzgar(d, 2, s[0]);
+      const f = t => t.enJaque ? 'está dando jaque ahora mismo'
+                              : 'jaques ' + t.jaq + ' · capturas que ganan material ' + t.caps + ' · jugadas que amenazan ' + t.amen;
+      let h = 'Recursos forzantes (los que tendría cada uno si le tocara mover):<ul><li>Yo: ' + f(a) + '</li><li>Él: ' + f(e) + '</li></ul>';
+      h += quien(d, 2, 'Tengo más recursos: la iniciativa es mía.', 'Sin ventaja clara de iniciativa.', 'Él tiene más recursos: cuidado con sus amenazas.');
+      h += '<br><small>Es una estimación por conteo.</small>';
+      return { ok: j.ok, html: h, res: [] };
+    }
+  });
+
+  P7.push({
+    id: '7d', corto: 'E · Estructura',
+    texto: 'E · Estructura: ¿quién tiene la mejor estructura de peones (menos doblados y aislados, más peones pasados)?', tipo: 'radio',
+    ops: opsLado('Yo', 'Parecida', 'Él'),
+    ev: s => {
+      const I = getInd(); if (I.fin) return finL();
+      const d = I.est.yo.punt - I.est.el.punt;
+      const j = juzgar(d, 1, s[0]);
+      const f = t => 'pasados: ' + (t.pas.length ? t.pas.join(', ') : 'ninguno') +
+                     ' · doblados: ' + (t.dob ? t.dobC.join(', ') : 'ninguno') +
+                     ' · aislados: ' + (t.ais ? t.aisC.join(', ') : 'ninguno');
+      let h = 'Peones (pasados suman, doblados y aislados restan):<ul><li>Yo: ' + f(I.est.yo) + ' → ' + signo(I.est.yo.punt) +
+              '</li><li>Él: ' + f(I.est.el) + ' → ' + signo(I.est.el.punt) + '</li></ul>';
+      h += quien(d, 1, 'Mi estructura es mejor.', 'Estructuras equivalentes.', 'Su estructura es mejor.');
+      return { ok: j.ok, html: h, res: [] };
+    }
+  });
+
+  P7.push({
+    id: '7e', corto: 'R · Rey',
+    texto: 'R · Rey: ¿qué rey está más seguro?', tipo: 'radio',
+    ops: opsLado('El mío', 'Parecidos', 'El suyo'),
+    ev: s => {
+      const I = getInd(); if (I.fin) return finL();
+      const dd = I.rey.el.punt - I.rey.yo.punt;   /* positivo = el mío está más seguro */
+      const j = juzgar(dd, 2, s[0]);
+      const f = (t, q) => q + ' (' + t.sq + '): ' + TIPO_REY[t.tipo] + ' · piezas rivales que presionan su zona: ' + t.att +
+                          ' · peones que faltan delante: ' + t.falta;
+      let h = f(I.rey.yo, 'Mi rey') + '.<br>' + f(I.rey.el, 'Su rey') + '.<br>';
+      h += quien(dd, 2, 'Mi rey está más seguro.', 'Reyes en situación parecida.', 'Su rey está más seguro: el mío corre más peligro.');
+      return { ok: j.ok, html: h + '<br><small>Es una estimación por conteo.</small>', res: [I.rey.yo.sq, I.rey.el.sq] };
+    }
+  });
+
+  P7.push({
+    id: '7f', corto: 'Balance final',
+    texto: 'Sumando M · A · I · E · R: ¿cómo veo la posición?', tipo: 'radio',
+    ops: opsLado('Me favorece', 'Igualada', 'Me perjudica'),
+    ev: s => {
+      const I = getInd(); if (I.fin) return finL();
+      const sg = (d, u) => d >= u ? 1 : d <= -u ? -1 : 0;
+      const pts = {
+        M: Math.max(-3, Math.min(3, I.mat.yo - I.mat.el)),
+        A: sg(I.act.yo.tot - I.act.el.tot, 5),
+        I: sg(I.ini.yo.tot - I.ini.el.tot, 2),
+        E: sg(I.est.yo.punt - I.est.el.punt, 1),
+        R: sg(I.rey.el.punt - I.rey.yo.punt, 2)
+      };
+      const tot = pts.M + pts.A + pts.I + pts.E + pts.R;
+      const sug = tot >= 2 ? 'yo' : tot <= -2 ? 'el' : 'par';
+      const ET = { yo: 'me favorece', par: 'está igualada', el: 'me perjudica' };
+      let h = 'Indicadores (a mi favor +, en mi contra −): Material ' + signo(pts.M) + ' · Actividad ' + signo(pts.A) +
+              ' · Iniciativa ' + signo(pts.I) + ' · Estructura ' + signo(pts.E) + ' · Rey ' + signo(pts.R) +
+              ' → total ' + signo(tot) + '.<br>Sugieren: <b>' + ET[sug] + '</b>.<br>';
+      h += s[0] === sug ? 'Coincide con tu valoración.'
+                        : 'Tú dijiste <b>' + ET[s[0]] + '</b>: ¿qué ves tú que estos números no ven?';
+      h += '<br><small>Valoración tuya: no puntúa. Una posición que no es tranquila (ver 6d) se evalúa mal.</small>';
+      return { ok: null, tit: '⚖️ Balance.', html: h, res: [] };
     }
   });
 
@@ -1402,7 +1745,7 @@ function construirPreguntas(x) {
     }
   });
 
-  return { 1: P1, 2: P2, 3: P3, 4: P4, 5: P5, 8: P8 };
+  return { 1: P1, 2: P2, 3: P3, 4: P4, 5: P5, 6: P6, 7: P7, 8: P8 };
 }
 
 function qtxt(q) { return typeof q.texto === 'function' ? q.texto() : q.texto; }
@@ -1424,8 +1767,9 @@ function coachReset() {
   C.ctx = calcCtx();
   C.verif = {}; C.tmp = []; C.verPreg = false; C.q = 0;
   C.cand = []; C.eleg = []; C.elegida = null; C.tras = null;
+  C.c6 = []; C.calcCand = null; C.linea = []; C.ind = null; C.vistaOff = false;
   resaltes = {};
-  C.preg = { 1: [], 2: [], 3: [], 4: [], 5: [], 8: [] };
+  C.preg = { 1: [], 2: [], 3: [], 4: [], 5: [], 6: [], 7: [], 8: [] };
   C.paso = 1;
   if (C.ctx.estado === 'ok') {
     C.preg = construirPreguntas(C.ctx);
@@ -1448,16 +1792,21 @@ function comprobar() {
   if (!q || C.verif[q.id]) return;
   const s = q.tipo === 'moves' ? C[q.store].slice() : leerSel();
   if (!s.length) { $('aviso').textContent = q.tipo === 'moves' ? 'Añade al menos una jugada.' : 'Marca al menos una opción.'; return; }
+  if (q.minimo && !q.minimo(s)) { $('aviso').textContent = q.minMsg || 'Faltan datos.'; return; }
   const r = q.ev(s);
   r.sel = s;
   C.verif[q.id] = r;
   if (r.ok !== null && ply === movs.length) sumar(C.paso, r.ok);
-  if (q.id === '5d' && window.AyudaSF && AyudaSF.candidatas) {
-    const fen = game.fen();
-    r.sf = AyudaSF.candidatas(fen, s.slice(), function (html) {
-      r.sf = html;
-      if (game.fen() === fen && C.verif['5d'] === r) renderCoach(false);
-    });
+
+  const fen = game.fen();
+  const alLlegar = function (html) {
+    r.sf = html;
+    if (game.fen() === fen && C.verif[q.id] === r) renderCoach(false);
+  };
+  if (window.AyudaSF) {
+    if (q.id === '5d' && AyudaSF.candidatas) r.sf = AyudaSF.candidatas(fen, s.slice(), alLlegar);
+    else if (q.id === '6b' && AyudaSF.linea) r.sf = AyudaSF.linea(fen, s.slice(), alLlegar);
+    else if (q.id === '7f' && AyudaSF.evaluar) r.sf = AyudaSF.evaluar(posEval().fen(), C.ctx.me, alLlegar);
   }
   renderCoach(false);
 }
@@ -1469,7 +1818,6 @@ function siguiente() {
   else {
     const nx = sigPaso(C.paso);
     if (nx === null) { C.paso = 'fin'; C.q = 0; }
-    else if (nx === 8 && C.paso === 5) { C.paso = 'pausa'; C.q = 0; }
     else { C.paso = nx; C.q = 0; }
   }
   renderCoach(true);
@@ -1488,7 +1836,17 @@ function irPaso(n) {
 function irGranate() { irPaso(8); }
 
 function toggleVer() { C.tmp = leerSel(); C.verPreg = !C.verPreg; renderCoach(false); }
+function toggleVista() { C.tmp = leerSel(); C.vistaOff = !C.vistaOff; renderCoach(false); }
 function reiniciarCoach() { coachReset(); renderCoach(true); }
+
+/* Borra lo hecho en Violeta y Turquesa para calcular otra candidata */
+function rehacerLinea() {
+  if (!C.ctx || C.ctx.estado !== 'ok') return;
+  [6, 7].forEach(n => C.preg[n].forEach(q => { delete C.verif[q.id]; }));
+  C.calcCand = null; C.linea = []; C.c6 = []; C.ind = null; C.vistaOff = false;
+  C.paso = 6; C.q = 0; C.tmp = []; C.verPreg = false;
+  renderCoach(true);
+}
 
 /* --- manejo de jugadas escritas dentro del coach --- */
 function addMov(store, max) {
@@ -1498,8 +1856,23 @@ function addMov(store, max) {
   if (!txt) return;
   txt = $('notacion').value === 'es' ? aEn(txt) : txt.replace(/0/g, 'O');
   const g = new Chess(game.fen());
+  if (store === 'linea') {
+    for (const s of C.linea) g.move(s);
+    if (g.game_over()) { $('aviso').textContent = 'La línea ya terminó la partida.'; return; }
+  }
   const m = g.move(txt, { sloppy: true });
   if (!m) { $('aviso').textContent = 'Jugada no válida en esta posición: ' + inp.value; return; }
+  if (store === 'linea') {
+    if (!C.linea.length && C.calcCand && m.san !== C.calcCand) {
+      $('aviso').textContent = 'La línea debe empezar por la candidata elegida: ' + nombreJug(C.calcCand) + '.';
+      return;
+    }
+    if (C.linea.length >= max) { $('aviso').textContent = 'Máximo ' + max + ' medias jugadas.'; return; }
+    C.linea.push(m.san);
+    renderCoach(false);
+    setTimeout(() => { const e = $('candIn'); if (e) e.focus(); }, 0);
+    return;
+  }
   if (C[store].includes(m.san)) { $('aviso').textContent = 'Ya la tienes en la lista.'; return; }
   if (max === 1) C[store] = [m.san];
   else if (C[store].length >= max) { $('aviso').textContent = 'Máximo ' + max + ' jugadas.'; return; }
@@ -1507,8 +1880,12 @@ function addMov(store, max) {
   renderCoach(false);
   setTimeout(() => { const e = $('candIn'); if (e) e.focus(); }, 0);
 }
-function quitarMov(store, i) { C[store].splice(i, 1); renderCoach(false); }
-function usarMov(san) { C.eleg = [san]; renderCoach(false); }
+function quitarMov(store, i) {
+  if (store === 'linea') C.linea.splice(i);      /* quitar una jugada quita también las siguientes */
+  else C[store].splice(i, 1);
+  renderCoach(false);
+}
+function usarMov(store, san) { C[store] = [san]; renderCoach(false); }
 
 function jugarElegida() {
   if (!C.elegida || ply !== movs.length || game.turn() !== miColor) { alert('Ve al final de la partida para registrar la jugada.'); return; }
@@ -1561,11 +1938,26 @@ function renderFranja() {
   });
 }
 
+/* ¿Hay que mostrar en el tablero la posición final de la línea calculada? */
+function vistaActiva() {
+  return C.linea.length > 0 && !C.vistaOff && (C.paso === 7 || (C.paso === 6 && C.q >= 1));
+}
+function vistaInfo() {
+  if (C.paso === 7 && !C.linea.length)
+    return '<div style="font-size:13px;margin-bottom:4px"><small>No calculaste una línea: evalúo la <b>posición actual</b>.</small></div>';
+  if (!C.linea.length || !(C.paso === 7 || (C.paso === 6 && C.q >= 1))) return '';
+  return '<div style="font-size:13px;margin-bottom:4px">' +
+    (C.paso === 7 ? 'Evalúo la posición <b>al final de mi línea</b>: ' : 'Mi línea: ') + lineaTxt(C.linea) + '. ' +
+    '<button onclick="toggleVista()" style="padding:2px 8px;font-size:12px">' +
+    (C.vistaOff ? '👁 Ver la línea en el tablero' : '↩ Ver la posición real') + '</button></div>';
+}
+
 function renderCoach(hablarAhora) {
   const cont = $('coachBody');
   const x = C.ctx;
   renderFranja();
   resaltes = {};
+  vista = null;
 
   if (!x) { cont.innerHTML = ''; dibujarTablero(); return; }
 
@@ -1579,33 +1971,19 @@ function renderCoach(hablarAhora) {
     dibujarTablero(); return;
   }
 
-  if (C.paso === 'pausa') {
-    let h = '<div class="info"><b>⏸ Ahora piensas tú, sin ayuda.</b><br>' +
-      'Recorre con la mano estos pasos antes de decidir:' +
-      '<table class="mapa" style="margin-top:6px"><tr><th></th><th>Paso</th><th>Gesto</th><th>Pregunta</th></tr>';
-    [6, 7].forEach(n => {
-      const P = PASOS[n];
-      h += '<tr><td style="background:' + colPaso(n) + ';width:14px"></td><td>' + P.cn + ' · ' + P.nom + '</td><td>' + P.gesto + '</td><td>' + P.ancla + '</td></tr>';
-    });
-    h += '</table><br>Cuando tengas <b>una</b> jugada decidida, pasa a Granate (chequeo final).</div>' +
-      '<div class="botones"><button class="prim" onclick="irGranate()">Ya decidí mi jugada → Granate</button>' +
-      '<button onclick="irPaso(5)">← Volver a Amarillo</button></div>';
-    cont.innerHTML = h;
-    dibujarTablero(); return;
-  }
-
   if (C.paso === 'fin') {
     let ok = 0, mal = 0, neu = 0;
     ORDEN.forEach(n => C.preg[n].forEach(q => {
       const v = C.verif[q.id]; if (!v) return;
       if (v.ok === true) ok++; else if (v.ok === false) mal++; else neu++;
     }));
-    let h = '<div class="info"><b>✔ Sistema completado: Azul, Rojo, Naranja, Verde, Amarillo y Granate.</b><br>' +
+    let h = '<div class="info"><b>✔ Sistema completado: Azul, Rojo, Naranja, Verde, Amarillo, Violeta, Turquesa y Granate.</b><br>' +
       'Aciertos: ' + ok + ' · A revisar: ' + mal + ' · Reflexión: ' + neu;
     if (C.elegida) h += '<br><br>Mi jugada: <b>' + nombreJug(C.elegida) + '</b>.';
     h += '<br><small>Recuerda: estas comprobaciones son estáticas (cuentan piezas y casillas). Stockfish las afina.</small></div><div class="botones">';
     if (C.elegida && ply === movs.length && game.turn() === miColor)
       h += '<button class="prim" onclick="jugarElegida()">▶ Jugar ' + nombreJug(C.elegida) + ' en el tablero</button>';
+    h += '<button onclick="rehacerLinea()">↺ Calcular otra candidata (Violeta y Turquesa)</button>';
     h += '<button onclick="reiniciarCoach()">Repetir esta posición</button></div>';
     cont.innerHTML = h;
     dibujarTablero(); return;
@@ -1617,6 +1995,8 @@ function renderCoach(hablarAhora) {
   const v = C.verif[q.id];
   const col = colPaso(C.paso);
   const txtCol = (C.paso === 5 && nivel < 4) ? '#222' : '#fff';
+
+  if (vistaActiva()) vista = posLinea(C.linea);
 
   let cab = '';
   if (nivel === 1) cab = '<b>' + P.cn + ' · Paso ' + P.n + ' · ' + P.nom + '</b><span>🤏 ' + P.gesto + '</span><span>Clave: ' + P.clave + '</span>';
@@ -1633,7 +2013,8 @@ function renderCoach(hablarAhora) {
   let ops = '';
   if (q.tipo === 'moves') {
     const lst = v ? v.sel : C[q.store];
-    ops = '<div>' + lst.map((s, i) => '<span class="chipm">' + nombreJug(s) +
+    const esL = q.store === 'linea';
+    ops = '<div>' + lst.map((s, i) => '<span class="chipm">' + (esL ? (i % 2 === 0 ? 'yo: ' : 'rival: ') : '') + nombreJug(s) +
       (v ? '' : ' <a onclick="quitarMov(\'' + q.store + '\',' + i + ')">×</a>') + '</span>').join('') + '</div>';
     if (!v) {
       const llamada = 'addMov(\'' + q.store + '\',' + q.max + ')';
@@ -1642,9 +2023,11 @@ function renderCoach(hablarAhora) {
         '<button class="prim" onclick="' + llamada + '">Añadir</button></div>';
       if (q.quick && C.cand.length) {
         ops += '<div style="margin-top:6px"><small>Usar una de mis candidatas:</small><br>' +
-          C.cand.map(s => '<button onclick="usarMov(\'' + s + '\')">' + nombreJug(s) + '</button>').join(' ') + '</div>';
+          C.cand.map(s => '<button onclick="usarMov(\'' + q.store + '\',\'' + s + '\')">' + nombreJug(s) + '</button>').join(' ') + '</div>';
       }
-      ops += '<small>' + (q.max > 1 ? 'Llevas ' + C[q.store].length + ' de ' + q.max + ' (ideal: 2 a 4).' : 'Una sola jugada.') + '</small>';
+      if (esL) ops += '<small>Llevas ' + lst.length + ' de ' + q.max + ' medias jugadas. Toca escribir: <b>' +
+        (lst.length % 2 === 0 ? 'mi jugada' : 'la respuesta del rival') + '</b>. Si quitas una jugada, se quitan también las siguientes.</small>';
+      else ops += '<small>' + (q.max > 1 ? 'Llevas ' + C[q.store].length + ' de ' + q.max + ' (ideal: 2 a 4).' : 'Una sola jugada.') + '</small>';
     }
   } else {
     const selecc = v ? v.sel : C.tmp;
@@ -1663,7 +2046,6 @@ function renderCoach(hablarAhora) {
     if (C.q === L.length - 1) {
       const nx = sigPaso(C.paso);
       if (nx === null) etiqueta = 'Terminar →';
-      else if (C.paso === 5) etiqueta = '⏸ Pausa: pensar yo →';
       else etiqueta = 'Pasar a ' + PASOS[nx].cn + ' (' + PASOS[nx].nom + ') →';
     }
     botones = '<button class="prim" onclick="siguiente()">' + etiqueta + '</button>';
@@ -1675,6 +2057,7 @@ function renderCoach(hablarAhora) {
   let ultTxt = '';
   if (x.ult) ultTxt = '<div style="font-size:13px;margin-bottom:4px">Jugada del rival: <b>' + nombreJug(x.ult.san) + '</b></div>';
   else if (C.paso === 2 && !C.preg[1].length) ultTxt = '<div style="font-size:13px;margin-bottom:4px"><small>No hay jugada previa del rival: empiezo directo por Seguridad.</small></div>';
+  ultTxt += vistaInfo();
 
   cont.innerHTML =
     '<div class="banda" style="background:' + col + ';color:' + txtCol + '">' + cab + '</div>' +
@@ -2075,7 +2458,67 @@ actualizar();
     return '<b>Stockfish está revisando tus candidatas…</b> (unos segundos)';
   }
 
-  window.AyudaSF = { revisar: revisar, despues: despues, candidatas: candidatas, nivel: function () { return nivelSF; } };
+  /* ---------- Violeta: revisar la línea calculada (nivel 2 o más) ---------- */
+  function linea(fen, lista, cb) {
+    if (nivelSF < 2 || !window.SF || !lista.length) return '';
+    var color = fen.split(' ')[1];
+    var g = new Chess(fen), m1 = g.move(lista[0]);
+    if (!m1 || g.game_over()) return '';
+    var fenA = g.fen(), rivalUci = null;
+    if (lista.length >= 2) {
+      var g2 = new Chess(fenA), m2 = g2.move(lista[1]);
+      if (m2) rivalUci = m2.from + m2.to + (m2.promotion || '');
+    }
+    var gf = new Chess(fen);
+    for (var i = 0; i < lista.length; i++) gf.move(lista[i]);
+    var fenF = gf.fen(), finJuego = gf.game_over();
+    var nota = '<br><small>Profundidad modesta: orientativo.</small>';
+
+    analizarC(fenA).then(function (r) {
+      var h = '<b>Stockfish revisa tu línea</b><ul>';
+      h += '<li>Tras ' + nom(lista[0]) + ', con la mejor defensa del rival: <b>' + texto(r, color) + '</b>.</li>';
+      if (rivalUci) {
+        if (r.best === rivalUci) {
+          h += '<li>La respuesta que pusiste al rival coincide con la que prefiere el motor.</li>';
+        } else {
+          var gb = new Chess(fenA);
+          var mb = gb.move({ from: r.best.slice(0, 2), to: r.best.slice(2, 4), promotion: r.best.length > 4 ? r.best[4] : undefined });
+          h += '<li>El motor prefiere para el rival <b>' + nom(mb ? mb.san : r.best) + '</b> en vez de ' + nom(lista[1]) + '. ¿Viste por qué?</li>';
+        }
+      }
+      h += '</ul>';
+      if (lista.length < 2 || finJuego || fenF === fenA) { cb(h + nota); return; }
+      return analizarC(fenF).then(function (d) {
+        var vr = rec(raw(r, color)), vd = rec(raw(d, color));
+        h += 'Al final de tu línea la posición vale <b>' + texto(d, color) + '</b>. ';
+        if (vd - vr >= 100) h += 'Tu línea es demasiado optimista: el rival tenía una defensa mejor.';
+        else if (vr - vd >= 100) h += 'Tu línea es pesimista: en realidad estás mejor de lo que calculaste.';
+        else h += 'Es coherente con lo que ve el motor.';
+        cb(h + nota);
+      });
+    }).catch(function (e) { cb('<b>Stockfish:</b> no pude consultar (' + ((e && e.message) || e) + ').'); });
+    return '<b>Stockfish está revisando tu línea…</b> (unos segundos)';
+  }
+
+  /* ---------- Turquesa: evaluar la posición final (nivel 2 o más) ---------- */
+  function evaluar(fen, color, cb) {
+    if (nivelSF < 2 || !window.SF) return '';
+    var g = new Chess(fen);
+    if (g.game_over()) return '';
+    analizarC(fen).then(function (r) {
+      var v = rec(raw(r, color));
+      var a = Math.abs(v);
+      var et = a < 30 ? 'posición prácticamente igualada'
+             : (v > 0 ? (a < 100 ? 'ligera ventaja para ti' : a < 300 ? 'ventaja clara para ti' : 'ventaja decisiva para ti')
+                      : (a < 100 ? 'ligera ventaja para él' : a < 300 ? 'ventaja clara para él' : 'ventaja decisiva para él'));
+      cb('<b>Stockfish evalúa esa posición</b>: ' + texto(r, color) + ' (desde tu lado) → ' + et + '.' +
+         '<br><small>Profundidad ' + r.depth + ': orientativo. Compáralo con tu balance.</small>');
+    }).catch(function (e) { cb('<b>Stockfish:</b> no pude consultar (' + ((e && e.message) || e) + ').'); });
+    return '<b>Stockfish está evaluando la posición…</b> (unos segundos)';
+  }
+
+  window.AyudaSF = { revisar: revisar, despues: despues, candidatas: candidatas, linea: linea, evaluar: evaluar,
+                     nivel: function () { return nivelSF; } };
 })();
 </script>
 
