@@ -1791,5 +1791,46 @@ actualizar();
 })();
 </script>
 
+<script>
+(function () {
+  var comprobarOrig = window.comprobar;
+  var renderOrig = window.renderCoach;
+  if (typeof comprobarOrig !== 'function' || typeof renderOrig !== 'function') return;
+
+  window.comprobar = function () {
+    var q = null;
+    try { q = C.preg[C.paso][C.q]; } catch (e) {}
+    var yaEstaba = q && C.verif[q.id];
+    comprobarOrig();
+    if (!q || q.id !== '5d' || yaEstaba) return;
+    var r = C.verif['5d'];
+    if (!r || r.sf || !window.AyudaSF || !AyudaSF.candidatas) return;
+    var fen = game.fen();
+    r.sf = AyudaSF.candidatas(fen, r.sel.slice(), function (html) {
+      r.sf = html;
+      if (game.fen() === fen && C.verif['5d'] === r) renderCoach(false);
+    }) || '';
+    renderCoach(false);
+  };
+
+  window.renderCoach = function (h) {
+    renderOrig(h);
+    try {
+      var r = C.verif['5d'];
+      if (C.paso === 5 && r && r.sf && C.preg[5][C.q] && C.preg[5][C.q].id === '5d') {
+        var bs = document.querySelectorAll('#coachBody .botones');
+        var ult = bs[bs.length - 1];
+        if (ult) {
+          var d = document.createElement('div');
+          d.className = 'fb neu';
+          d.innerHTML = r.sf;
+          ult.parentNode.insertBefore(d, ult);
+        }
+      }
+    } catch (e) {}
+  };
+})();
+</script>
+
 </body>
 </html>
